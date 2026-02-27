@@ -13,6 +13,10 @@ func NewHandler(target *url.URL, transport http.RoundTripper, logger *slog.Logge
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(target)
+			// Override path: route all requests to the target's path exactly,
+			// rather than joining target path + request path (which doubles it).
+			r.Out.URL.Path = target.Path
+			r.Out.URL.RawPath = target.RawPath
 			r.Out.Host = target.Host
 			r.SetXForwarded()
 		},
