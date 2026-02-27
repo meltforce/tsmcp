@@ -268,8 +268,8 @@ func TestMetadataEndpointRegistered(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
-	if got["resource"] != testMetadata {
-		t.Errorf("resource = %v", got["resource"])
+	if got["resource"] != "https://mcp.example.com" {
+		t.Errorf("resource = %v, want https://mcp.example.com", got["resource"])
 	}
 }
 

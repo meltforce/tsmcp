@@ -22,8 +22,15 @@ func New(cfg *config.Config, transport http.RoundTripper, checker health.Checker
 
 	// OAuth Protected Resource Metadata — only when auth is configured
 	if cfg.Auth != nil {
+		// resource identifier = origin of the metadata URL (strip the well-known path)
+		metaURL, err := url.Parse(cfg.Auth.ResourceMetadataURL)
+		if err != nil {
+			return nil, fmt.Errorf("parsing resource_metadata_url: %w", err)
+		}
+		resource := metaURL.Scheme + "://" + metaURL.Host
+
 		mux.Handle("GET /.well-known/oauth-protected-resource",
-			auth.MetadataHandler(cfg.Auth.ResourceMetadataURL, []string{cfg.Auth.Issuer}))
+			auth.MetadataHandler(resource, []string{cfg.Auth.Issuer}))
 	}
 
 	// MCP endpoint routes
