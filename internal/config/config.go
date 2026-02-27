@@ -86,8 +86,8 @@ func (c *Config) validateListen() error {
 	if ip == nil {
 		return fmt.Errorf("server.listen host must be an IP address, got %q", host)
 	}
-	if !ip.IsLoopback() {
-		return fmt.Errorf("server.listen must use a loopback address, got %q", host)
+	if !ip.IsLoopback() && !ip.IsUnspecified() {
+		return fmt.Errorf("server.listen must use a loopback or unspecified address, got %q", host)
 	}
 
 	return nil

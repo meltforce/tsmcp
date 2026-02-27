@@ -49,7 +49,7 @@ endpoints:
 func TestRejectNonLoopback(t *testing.T) {
 	path := writeConfig(t, `
 server:
-  listen: "0.0.0.0:8900"
+  listen: "192.168.1.1:8900"
 tailnet:
   hostname: "mcp-bridge"
   state_dir: "/tmp/tsnet"
@@ -61,6 +61,24 @@ endpoints:
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected error for non-loopback address")
+	}
+}
+
+func TestAllowAllInterfaces(t *testing.T) {
+	path := writeConfig(t, `
+server:
+  listen: "0.0.0.0:8900"
+tailnet:
+  hostname: "mcp-bridge"
+  state_dir: "/tmp/tsnet"
+  authkey_env: "TS_AUTHKEY"
+endpoints:
+  - path: "/mcp/test"
+    target: "http://test:3000/mcp"
+`)
+	_, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error for all-interfaces address: %v", err)
 	}
 }
 

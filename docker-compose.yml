@@ -1,13 +1,24 @@
 services:
   mcp-bridge:
     image: meltforce/tsmcp:edge
+    container_name: tsmcp
     restart: unless-stopped
-    network_mode: host
     environment:
       - TS_AUTHKEY=${TS_AUTHKEY}
     volumes:
       - ./config.yaml:/etc/mcp-bridge/config.yaml:ro
       - tsnet-state:/var/lib/mcp-bridge/tsnet
+    networks:
+      - proxy
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=64m
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8900/healthz"]
       interval: 10s
@@ -17,3 +28,8 @@ services:
 
 volumes:
   tsnet-state:
+
+networks:
+  proxy:
+    name: proxy-net
+    external: true

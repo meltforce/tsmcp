@@ -16,15 +16,15 @@
 ## Phase 1 (Complete)
 - Authless proxy: POST/GET/DELETE per MCP Streamable HTTP spec
 - SSE streaming with `FlushInterval: -1`, `WriteTimeout: 0`
-- YAML config with loopback-only validation
+- YAML config with loopback/unspecified-only validation
 - Origin header validation, structured slog/JSON logging
 - Health check (`/healthz`) with tsnet readiness
-- 28 unit tests, all passing
+- 29 unit tests, all passing
 
 ## Docker & CI/CD (Complete)
 - **Dockerfile**: multi-stage `golang:1.25-alpine` → `alpine:3.20`, 48MB image
 - **Docker Hub**: `meltforce/tsmcp` (edge tag on push to main, versioned on release)
-- **docker-compose.yml**: `network_mode: host` (so bridge listens on 127.0.0.1 and Caddy on same host can reach it), tsnet state volume
+- **docker-compose.yml**: `proxy-net` external network (Caddy reaches container by name), tsnet state volume, hardened (read-only, cap_drop ALL, no-new-privileges)
 - **Deploy workflow** (`.github/workflows/deploy.yml`): build+push → Tailscale SSH → pull+restart
 - **Release workflow** (`.github/workflows/release.yml`): tag push → latest + versioned tag + GitHub release
 - CI pattern matches cast2md/FreeReps: Tailscale GitHub Action with `tag:ci`, direct `ssh root@host` over Tailscale SSH (no SSH keys)
@@ -47,7 +47,8 @@
 ## Gotchas
 - Go 1.25 ServeMux: `{$}` must be its own path segment after `/`, can't append to non-slash path. Paths without trailing slash already match exactly — just omit `{$}`.
 - tailscale.com pulls in large dep tree and forced Go 1.25+
-- Docker uses `network_mode: host` because config validates loopback-only listen address — bridge binds 127.0.0.1:8900, Caddy on same host proxies to it
+- Docker uses `proxy-net` external network — container binds 0.0.0.0:8900, Caddy reaches it by container name `tsmcp`
+- Listen validation allows loopback (127.0.0.1) and unspecified (0.0.0.0, ::) but rejects arbitrary IPs
 
 ## Structure
 See `internal/{config,proxy,tsbridge,health,server}/` — each with `_test.go`
