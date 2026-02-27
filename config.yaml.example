@@ -1,0 +1,18 @@
+server:
+  listen: "127.0.0.1:8900"
+  allowed_origins:
+    - "https://claude.ai"
+    - "https://claude.com"
+
+tailnet:
+  hostname: "mcp-bridge"
+  state_dir: "/var/lib/mcp-bridge/tsnet"
+  authkey_env: "TS_AUTHKEY"
+
+endpoints:
+  - path: "/mcp/health"
+    target: "http://freeresp:3001/mcp"
+    description: "Health Data MCP Server"
+  - path: "/mcp/infra"
+    target: "http://homelab-mcp:3000/mcp"
+    description: "Infrastructure Management"
