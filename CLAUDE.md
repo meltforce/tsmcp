@@ -8,7 +8,7 @@
 - Key deps: `tailscale.com` (tsnet), `gopkg.in/yaml.v3`, `golang-jwt/jwt/v5`, `MicahParks/keyfunc/v3`
 
 ## Architecture
-- **Pure resource server** — validates JWTs from tsidp, doesn't issue tokens
+- **Pure resource server** — validates tokens from tsidp, doesn't issue tokens
 - Single FQDN with path-based routing, each path = separate Claude connector
 - tsnet for outbound-only Tailnet dialing (never listens on Tailnet)
 - `httputil.ReverseProxy` auto-detects SSE and flushes; no custom streaming code
@@ -21,15 +21,14 @@
 - Origin header validation, structured slog/JSON logging
 - Health check (`/healthz`) with tsnet readiness
 
-## Phase 2 (Complete)
-- Optional JWT validation via `auth:` config section (omit for authless mode)
-- RFC 9728 `/.well-known/oauth-protected-resource` metadata endpoint
-- JWKS-based JWT validation with background key refresh (`keyfunc/v3`)
+## Phase 2 (Partial — OAuth discovery works, token validation needs rework)
+- Optional auth via `auth:` config section (omit for authless mode)
+- RFC 9728 `/.well-known/oauth-protected-resource` metadata endpoint — working, correctly returns resource origin and authorization server
+- OAuth discovery chain works end-to-end: Claude.ai discovers tsidp, redirects user, completes authorization, gets token
+- **Blocker**: tsidp issues opaque access tokens, not JWTs. Current JWKS-based JWT validation fails with "token contains an invalid number of segments". Need to replace with token introspection (see Phase 3).
 - Per-handler auth wrapping: `/healthz` and `/.well-known/*` always unauthenticated
 - 401 responses include `WWW-Authenticate: Bearer resource_metadata="<url>"` per MCP spec
-- Claims accessible in handlers via `auth.ClaimsFromContext(ctx)`
-- Validates: issuer, audience, expiration, signature (RS256/ES256/EdDSA)
-- 57 unit tests, all passing (29 Phase 1 + 28 Phase 2)
+- 57 unit tests, all passing
 
 ### Auth package (`internal/auth/`)
 - `MetadataHandler(resource, authorizationServers)` — serves RFC 9728 JSON
@@ -44,9 +43,28 @@
 
 ### Server wiring (`internal/server/`)
 - `server.New()` signature: `(cfg, transport, checker, jwtValidator *auth.JWTValidator, logger)`
-- Metadata route registered only when `cfg.Auth != nil`
+- Metadata route registered only when `cfg.Auth != nil`; `resource` field derived from metadata URL origin
 - MCP handlers wrapped with `jwtValidator.Middleware()` only when validator is not nil
 - `/healthz` and `/.well-known/*` never wrapped — always unauthenticated
+
+## Phase 3 (Next — Token Introspection)
+tsidp issues opaque access tokens, so local JWT validation won't work. Replace with OAuth 2.0 Token Introspection (RFC 7662).
+
+### What needs to change
+- **New**: `TokenIntrospector` in `internal/auth/` — calls tsidp's `/introspect` endpoint to validate opaque tokens
+  - tsidp introspection endpoint: `https://idp.leo-royal.ts.net/introspect`
+  - tsidp supports `client_secret_post` and `client_secret_basic` auth methods
+  - Must use tsnet transport (same reason as JWKS — tsidp resolves to Tailscale IP)
+  - Should cache introspection results briefly to avoid per-request round-trips
+- **Replace**: `JWTValidator` middleware with introspection-based middleware
+- **Config**: replace `jwks_url` with `introspection_endpoint` and add `client_id`/`client_secret` for authenticating introspection requests
+- **Remove or keep**: `keyfunc/v3` and JWKS code — can be removed if JWT validation is fully replaced
+- **Keep**: `MetadataHandler`, `ClaimsFromContext`, middleware pattern, transport plumbing — all still needed
+
+### Key decisions to make
+- Client credentials for introspection: tsidp requires the client to authenticate when calling `/introspect`. Need to register a client with tsidp or use existing credentials.
+- Caching strategy: introspect every request vs. cache by token hash with short TTL
+- Whether to also validate the ID token (which IS a JWT) as a secondary check
 
 ## Docker & CI/CD (Complete)
 - **Dockerfile**: multi-stage `golang:1.25-alpine` → `alpine:3.20`, 48MB image
@@ -57,14 +75,12 @@
 - CI pattern matches cast2md/FreeReps: Tailscale GitHub Action with `tag:ci`, direct `ssh root@host` over Tailscale SSH (no SSH keys)
 - Uses `secrets.DEPLOY_HOST` and `vars.DEPLOY_PATH` — need to be set in repo settings
 
-## Deployment TODO (not yet done)
-1. Set GitHub repo secrets/vars: `DEPLOY_HOST` (Tailscale hostname of VPS), `DEPLOY_PATH` (path to docker-compose on VPS)
-2. Org secrets already shared: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`, `TS_OAUTH_CLIENT_ID`, `TS_AUDIENCE`
-3. ACL: `tag:ci` needs SSH access to the VPS in Tailscale ACLs (same pattern as cast2md/FreeReps deploys)
-4. Create `config.yaml` on VPS with real endpoint targets (freeresp, homelab-mcp, etc.)
-5. Create `TS_AUTHKEY` for the bridge's own tsnet node (separate from CI — this is the bridge joining the tailnet)
-6. Add Caddy route on VPS: `mcp.meltforce.org { reverse_proxy 127.0.0.1:8900 { flush_interval -1 } }`
-7. Add as custom connector in Claude.ai (authless initially, then with OAuth)
+## Deployment (on nihilist VPS)
+- **Done**: Docker image builds, CI/CD deploys, Caddy route at `mcp.meltforce.net`, tsnet bridge joins tailnet, Claude.ai connector configured
+- **Done**: OAuth discovery flow works end-to-end (Claude.ai → resource metadata → tsidp authorize → token)
+- **Blocked**: Auth rejected — need token introspection (Phase 3) before enabling auth in production
+- **Container currently stopped** — restart after Phase 3 is implemented
+- SSH: `root@nihilist`; container: `tsmcp`
 
 ## Gotchas
 - Go 1.25 ServeMux: `{$}` must be its own path segment after `/`, can't append to non-slash path. Paths without trailing slash already match exactly — just omit `{$}`.
@@ -74,6 +90,9 @@
 - `keyfunc/v3`: `Keyfunc` is an interface with no `Cancel()` method — stop background refresh by cancelling the context passed to `NewDefaultOverrideCtx`
 - `keyfunc/v3`: `NewDefaultOverrideCtx` does the initial JWKS fetch synchronously — if the JWKS URL is unreachable at startup, `NewJWTValidator` returns an error
 - JWKS endpoint (tsidp) resolves to a Tailscale IP — inside Docker with userspace tsnet, Go's default HTTP client can't reach it. `NewJWTValidator` takes the tsnet transport so JWKS fetches dial through tsnet, same as proxy requests.
+- tsidp issues **opaque access tokens**, not JWTs — local JWT parsing fails. Token introspection is required.
+- tsidp (`idp.leo-royal.ts.net`) is publicly reachable via Tailscale Funnel
+- RFC 9728 `resource` field must be the server origin (e.g. `https://mcp.meltforce.net`), not the metadata URL path — Claude.ai uses it as the base for OAuth endpoint discovery
 
 ## Structure
 ```
