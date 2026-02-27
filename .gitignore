@@ -1,4 +1,4 @@
-mcp-tailnet-bridge
+tsmcp
 config.yaml
 *.env
 .env
