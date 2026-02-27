@@ -7,17 +7,24 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/meltforce/tsmcp/internal/auth"
 	"github.com/meltforce/tsmcp/internal/config"
 	"github.com/meltforce/tsmcp/internal/health"
 	"github.com/meltforce/tsmcp/internal/proxy"
 )
 
 // New creates the HTTP server with all routes and middleware wired up.
-func New(cfg *config.Config, transport http.RoundTripper, checker health.Checker, logger *slog.Logger) (*http.Server, error) {
+func New(cfg *config.Config, transport http.RoundTripper, checker health.Checker, jwtValidator *auth.JWTValidator, logger *slog.Logger) (*http.Server, error) {
 	mux := http.NewServeMux()
 
-	// Health check
+	// Health check — always unauthenticated
 	mux.Handle("GET /healthz", health.Handler(checker))
+
+	// OAuth Protected Resource Metadata — only when auth is configured
+	if cfg.Auth != nil {
+		mux.Handle("GET /.well-known/oauth-protected-resource",
+			auth.MetadataHandler(cfg.Auth.ResourceMetadataURL, []string{cfg.Auth.Issuer}))
+	}
 
 	// MCP endpoint routes
 	for _, ep := range cfg.Endpoints {
@@ -31,7 +38,12 @@ func New(cfg *config.Config, transport http.RoundTripper, checker health.Checker
 			return nil, fmt.Errorf("parsing target for %s: %w", ep.Path, err)
 		}
 
-		handler := proxy.NewHandler(target, transport, logger)
+		var handler http.Handler = proxy.NewHandler(target, transport, logger)
+
+		// Wrap with JWT auth when validator is present
+		if jwtValidator != nil {
+			handler = jwtValidator.Middleware()(handler)
+		}
 
 		mux.Handle("POST "+ep.Path, handler)
 		mux.Handle("GET "+ep.Path, handler)

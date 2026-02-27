@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/meltforce/tsmcp/internal/auth"
 	"github.com/meltforce/tsmcp/internal/config"
 	"github.com/meltforce/tsmcp/internal/proxy"
 	"github.com/meltforce/tsmcp/internal/server"
@@ -55,8 +56,19 @@ func run(ctx context.Context, configPath string, logger *slog.Logger) error {
 	// Create transport using tsnet dialer
 	transport := proxy.NewTailnetTransport(bridge)
 
+	// Create JWT validator if auth is configured
+	var jwtValidator *auth.JWTValidator
+	if cfg.Auth != nil {
+		jwtValidator, err = auth.NewJWTValidator(ctx, cfg.Auth.JWKSURL, cfg.Auth.Issuer, cfg.Auth.Audience, cfg.Auth.ResourceMetadataURL, logger)
+		if err != nil {
+			return err
+		}
+		defer jwtValidator.Close()
+		logger.Info("jwt validation enabled", "issuer", cfg.Auth.Issuer, "audience", cfg.Auth.Audience)
+	}
+
 	// Assemble HTTP server
-	srv, err := server.New(cfg, transport, bridge, logger)
+	srv, err := server.New(cfg, transport, bridge, jwtValidator, logger)
 	if err != nil {
 		return err
 	}

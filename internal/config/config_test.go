@@ -231,6 +231,173 @@ endpoints:
 	}
 }
 
+func TestAuthConfigAbsent(t *testing.T) {
+	path := writeConfig(t, `
+server:
+  listen: "127.0.0.1:8900"
+tailnet:
+  hostname: "mcp-bridge"
+  state_dir: "/tmp/tsnet"
+  authkey_env: "TS_AUTHKEY"
+endpoints:
+  - path: "/mcp/test"
+    target: "http://test:3000/mcp"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Auth != nil {
+		t.Error("auth should be nil when absent from config")
+	}
+}
+
+func TestAuthConfigValid(t *testing.T) {
+	path := writeConfig(t, `
+server:
+  listen: "127.0.0.1:8900"
+tailnet:
+  hostname: "mcp-bridge"
+  state_dir: "/tmp/tsnet"
+  authkey_env: "TS_AUTHKEY"
+endpoints:
+  - path: "/mcp/test"
+    target: "http://test:3000/mcp"
+auth:
+  issuer: "https://login.tailscale.com/oidc"
+  audience: "https://mcp.meltforce.org"
+  jwks_url: "https://login.tailscale.com/oidc/jwks"
+  resource_metadata_url: "https://mcp.meltforce.org/.well-known/oauth-protected-resource"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Auth == nil {
+		t.Fatal("auth should not be nil")
+	}
+	if cfg.Auth.Issuer != "https://login.tailscale.com/oidc" {
+		t.Errorf("issuer = %q", cfg.Auth.Issuer)
+	}
+	if cfg.Auth.Audience != "https://mcp.meltforce.org" {
+		t.Errorf("audience = %q", cfg.Auth.Audience)
+	}
+	if cfg.Auth.JWKSURL != "https://login.tailscale.com/oidc/jwks" {
+		t.Errorf("jwks_url = %q", cfg.Auth.JWKSURL)
+	}
+	if cfg.Auth.ResourceMetadataURL != "https://mcp.meltforce.org/.well-known/oauth-protected-resource" {
+		t.Errorf("resource_metadata_url = %q", cfg.Auth.ResourceMetadataURL)
+	}
+}
+
+func TestRejectMissingAuthFields(t *testing.T) {
+	base := `
+server:
+  listen: "127.0.0.1:8900"
+tailnet:
+  hostname: "mcp-bridge"
+  state_dir: "/tmp/tsnet"
+  authkey_env: "TS_AUTHKEY"
+endpoints:
+  - path: "/mcp/test"
+    target: "http://test:3000/mcp"
+auth:
+`
+	tests := []struct {
+		name   string
+		config string
+	}{
+		{
+			name: "missing issuer",
+			config: base + `
+  audience: "https://mcp.meltforce.org"
+  jwks_url: "https://login.tailscale.com/oidc/jwks"
+  resource_metadata_url: "https://mcp.meltforce.org/.well-known/oauth-protected-resource"
+`,
+		},
+		{
+			name: "missing audience",
+			config: base + `
+  issuer: "https://login.tailscale.com/oidc"
+  jwks_url: "https://login.tailscale.com/oidc/jwks"
+  resource_metadata_url: "https://mcp.meltforce.org/.well-known/oauth-protected-resource"
+`,
+		},
+		{
+			name: "missing jwks_url",
+			config: base + `
+  issuer: "https://login.tailscale.com/oidc"
+  audience: "https://mcp.meltforce.org"
+  resource_metadata_url: "https://mcp.meltforce.org/.well-known/oauth-protected-resource"
+`,
+		},
+		{
+			name: "missing resource_metadata_url",
+			config: base + `
+  issuer: "https://login.tailscale.com/oidc"
+  audience: "https://mcp.meltforce.org"
+  jwks_url: "https://login.tailscale.com/oidc/jwks"
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeConfig(t, tt.config)
+			_, err := Load(path)
+			if err == nil {
+				t.Fatalf("expected error for %s", tt.name)
+			}
+		})
+	}
+}
+
+func TestRejectInvalidJWKSURL(t *testing.T) {
+	path := writeConfig(t, `
+server:
+  listen: "127.0.0.1:8900"
+tailnet:
+  hostname: "mcp-bridge"
+  state_dir: "/tmp/tsnet"
+  authkey_env: "TS_AUTHKEY"
+endpoints:
+  - path: "/mcp/test"
+    target: "http://test:3000/mcp"
+auth:
+  issuer: "https://login.tailscale.com/oidc"
+  audience: "https://mcp.meltforce.org"
+  jwks_url: "not-a-url"
+  resource_metadata_url: "https://mcp.meltforce.org/.well-known/oauth-protected-resource"
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for invalid JWKS URL")
+	}
+}
+
+func TestRejectFTPJWKSURL(t *testing.T) {
+	path := writeConfig(t, `
+server:
+  listen: "127.0.0.1:8900"
+tailnet:
+  hostname: "mcp-bridge"
+  state_dir: "/tmp/tsnet"
+  authkey_env: "TS_AUTHKEY"
+endpoints:
+  - path: "/mcp/test"
+    target: "http://test:3000/mcp"
+auth:
+  issuer: "https://login.tailscale.com/oidc"
+  audience: "https://mcp.meltforce.org"
+  jwks_url: "ftp://login.tailscale.com/oidc/jwks"
+  resource_metadata_url: "https://mcp.meltforce.org/.well-known/oauth-protected-resource"
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for FTP JWKS URL")
+	}
+}
+
 func TestIPv6Loopback(t *testing.T) {
 	path := writeConfig(t, `
 server:

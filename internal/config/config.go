@@ -14,6 +14,14 @@ type Config struct {
 	Server    ServerConfig     `yaml:"server"`
 	Tailnet   TailnetConfig    `yaml:"tailnet"`
 	Endpoints []EndpointConfig `yaml:"endpoints"`
+	Auth      *AuthConfig      `yaml:"auth,omitempty"`
+}
+
+type AuthConfig struct {
+	Issuer              string `yaml:"issuer"`
+	Audience            string `yaml:"audience"`
+	JWKSURL             string `yaml:"jwks_url"`
+	ResourceMetadataURL string `yaml:"resource_metadata_url"`
 }
 
 type ServerConfig struct {
@@ -68,6 +76,35 @@ func (c *Config) Validate() error {
 	}
 	if err := c.validateEndpoints(); err != nil {
 		return err
+	}
+	if err := c.validateAuth(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Config) validateAuth() error {
+	if c.Auth == nil {
+		return nil
+	}
+	if c.Auth.Issuer == "" {
+		return fmt.Errorf("auth.issuer is required")
+	}
+	if c.Auth.Audience == "" {
+		return fmt.Errorf("auth.audience is required")
+	}
+	if c.Auth.JWKSURL == "" {
+		return fmt.Errorf("auth.jwks_url is required")
+	}
+	u, err := url.Parse(c.Auth.JWKSURL)
+	if err != nil {
+		return fmt.Errorf("auth.jwks_url is not a valid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("auth.jwks_url must use http or https scheme, got %q", u.Scheme)
+	}
+	if c.Auth.ResourceMetadataURL == "" {
+		return fmt.Errorf("auth.resource_metadata_url is required")
 	}
 	return nil
 }
