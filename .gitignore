@@ -1,3 +1,4 @@
 mcp-tailnet-bridge
 config.yaml
 *.env
+.env

@@ -1,0 +1,19 @@
+services:
+  mcp-bridge:
+    image: meltforce/tsmcp:edge
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+    volumes:
+      - ./config.yaml:/etc/mcp-bridge/config.yaml:ro
+      - tsnet-state:/var/lib/mcp-bridge/tsnet
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8900/healthz"]
+      interval: 10s
+      timeout: 3s
+      start_period: 30s
+      retries: 3
+
+volumes:
+  tsnet-state:
