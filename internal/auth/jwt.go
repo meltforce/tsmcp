@@ -26,10 +26,16 @@ type JWTValidator struct {
 }
 
 // NewJWTValidator creates a validator that fetches and caches keys from the JWKS URL.
-func NewJWTValidator(ctx context.Context, jwksURL, issuer, audience, resourceMetadataURL string, logger *slog.Logger) (*JWTValidator, error) {
+// If transport is non-nil, JWKS fetches use it (e.g. tsnet); nil falls back to the default HTTP client.
+func NewJWTValidator(ctx context.Context, jwksURL, issuer, audience, resourceMetadataURL string, transport http.RoundTripper, logger *slog.Logger) (*JWTValidator, error) {
 	jwksCtx, cancel := context.WithCancel(ctx)
 
-	jwks, err := keyfunc.NewDefaultCtx(jwksCtx, []string{jwksURL})
+	override := keyfunc.Override{}
+	if transport != nil {
+		override.Client = &http.Client{Transport: transport}
+	}
+
+	jwks, err := keyfunc.NewDefaultOverrideCtx(jwksCtx, []string{jwksURL}, override)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("creating JWKS keyfunc: %w", err)

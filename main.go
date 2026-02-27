@@ -59,7 +59,7 @@ func run(ctx context.Context, configPath string, logger *slog.Logger) error {
 	// Create JWT validator if auth is configured
 	var jwtValidator *auth.JWTValidator
 	if cfg.Auth != nil {
-		jwtValidator, err = auth.NewJWTValidator(ctx, cfg.Auth.JWKSURL, cfg.Auth.Issuer, cfg.Auth.Audience, cfg.Auth.ResourceMetadataURL, logger)
+		jwtValidator, err = auth.NewJWTValidator(ctx, cfg.Auth.JWKSURL, cfg.Auth.Issuer, cfg.Auth.Audience, cfg.Auth.ResourceMetadataURL, transport, logger)
 		if err != nil {
 			return err
 		}

@@ -300,7 +300,7 @@ func TestHealthzBypassesAuth(t *testing.T) {
 	cfg.Auth = testAuthConfig()
 	cfg.Auth.JWKSURL = jwksURL
 
-	v, err := auth.NewJWTValidator(context.Background(), jwksURL, testIssuer, testAudience, testMetadata, slog.Default())
+	v, err := auth.NewJWTValidator(context.Background(), jwksURL, testIssuer, testAudience, testMetadata, nil, slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +336,7 @@ func TestMCPEndpointRequiresAuth(t *testing.T) {
 	defer upstream.Close()
 	cfg.Endpoints[0].Target = upstream.URL
 
-	v, err := auth.NewJWTValidator(context.Background(), jwksURL, testIssuer, testAudience, testMetadata, slog.Default())
+	v, err := auth.NewJWTValidator(context.Background(), jwksURL, testIssuer, testAudience, testMetadata, nil, slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +373,7 @@ func TestMCPEndpointWithValidToken(t *testing.T) {
 	defer upstream.Close()
 	cfg.Endpoints[0].Target = upstream.URL
 
-	v, err := auth.NewJWTValidator(context.Background(), jwksURL, testIssuer, testAudience, testMetadata, slog.Default())
+	v, err := auth.NewJWTValidator(context.Background(), jwksURL, testIssuer, testAudience, testMetadata, nil, slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}

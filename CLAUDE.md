@@ -33,7 +33,7 @@
 
 ### Auth package (`internal/auth/`)
 - `MetadataHandler(resource, authorizationServers)` — serves RFC 9728 JSON
-- `NewJWTValidator(ctx, jwksURL, issuer, audience, resourceMetadataURL, logger)` — creates validator with background JWKS refresh
+- `NewJWTValidator(ctx, jwksURL, issuer, audience, resourceMetadataURL, transport, logger)` — creates validator with background JWKS refresh; transport routes fetches through tsnet (nil = default HTTP client, used in tests)
 - `(*JWTValidator).Middleware()` — returns `func(http.Handler) http.Handler` for per-route wrapping
 - `(*JWTValidator).Close()` — cancels background refresh goroutine via context
 - `ClaimsFromContext(ctx)` — retrieves `jwt.Claims` set by middleware
@@ -71,8 +71,9 @@
 - tailscale.com pulls in large dep tree and forced Go 1.25+
 - Docker uses `proxy-net` external network — container binds 0.0.0.0:8900, Caddy reaches it by container name `tsmcp`
 - Listen validation allows loopback (127.0.0.1) and unspecified (0.0.0.0, ::) but rejects arbitrary IPs
-- `keyfunc/v3`: `Keyfunc` is an interface with no `Cancel()` method — stop background refresh by cancelling the context passed to `NewDefaultCtx`
-- `keyfunc/v3`: `NewDefaultCtx` does the initial JWKS fetch synchronously — if the JWKS URL is unreachable at startup, `NewJWTValidator` returns an error
+- `keyfunc/v3`: `Keyfunc` is an interface with no `Cancel()` method — stop background refresh by cancelling the context passed to `NewDefaultOverrideCtx`
+- `keyfunc/v3`: `NewDefaultOverrideCtx` does the initial JWKS fetch synchronously — if the JWKS URL is unreachable at startup, `NewJWTValidator` returns an error
+- JWKS endpoint (tsidp) resolves to a Tailscale IP — inside Docker with userspace tsnet, Go's default HTTP client can't reach it. `NewJWTValidator` takes the tsnet transport so JWKS fetches dial through tsnet, same as proxy requests.
 
 ## Structure
 ```

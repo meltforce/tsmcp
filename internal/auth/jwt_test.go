@@ -87,7 +87,7 @@ func validClaims() jwt.MapClaims {
 
 func newTestValidator(t *testing.T, jwksURL string) *JWTValidator {
 	t.Helper()
-	v, err := NewJWTValidator(context.Background(), jwksURL, testIssuer, testAudience, testMetadata, slog.Default())
+	v, err := NewJWTValidator(context.Background(), jwksURL, testIssuer, testAudience, testMetadata, nil, slog.Default())
 	if err != nil {
 		t.Fatalf("creating validator: %v", err)
 	}
