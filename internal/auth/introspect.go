@@ -18,16 +18,33 @@ const claimsKey contextKey = 0
 
 // IntrospectionClaims holds the fields returned by an RFC 7662 introspection response.
 type IntrospectionClaims struct {
-	Active    bool   `json:"active"`
-	Sub       string `json:"sub,omitempty"`
-	Aud       string `json:"aud,omitempty"`
-	Iss       string `json:"iss,omitempty"`
-	Scope     string `json:"scope,omitempty"`
-	ClientID  string `json:"client_id,omitempty"`
-	Username  string `json:"username,omitempty"`
-	TokenType string `json:"token_type,omitempty"`
-	Exp       int64  `json:"exp,omitempty"`
-	Iat       int64  `json:"iat,omitempty"`
+	Active    bool     `json:"active"`
+	Sub       string   `json:"sub,omitempty"`
+	Aud       Audience `json:"aud,omitempty"`
+	Iss       string   `json:"iss,omitempty"`
+	Scope     string   `json:"scope,omitempty"`
+	ClientID  string   `json:"client_id,omitempty"`
+	Username  string   `json:"username,omitempty"`
+	TokenType string   `json:"token_type,omitempty"`
+	Exp       int64    `json:"exp,omitempty"`
+	Iat       int64    `json:"iat,omitempty"`
+}
+
+// Audience handles the "aud" claim which can be a string or an array of strings.
+type Audience []string
+
+func (a *Audience) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		*a = Audience{s}
+		return nil
+	}
+	var arr []string
+	if err := json.Unmarshal(data, &arr); err != nil {
+		return err
+	}
+	*a = Audience(arr)
+	return nil
 }
 
 type cacheEntry struct {
