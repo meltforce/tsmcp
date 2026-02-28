@@ -105,12 +105,6 @@ func (c *Config) validateAuth() error {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return fmt.Errorf("auth.introspection_url must use http or https scheme, got %q", u.Scheme)
 	}
-	if c.Auth.ClientID == "" {
-		return fmt.Errorf("auth.client_id is required")
-	}
-	if c.Auth.ClientSecret == "" {
-		return fmt.Errorf("auth.client_secret is required")
-	}
 	if c.Auth.ResourceMetadataURL == "" {
 		return fmt.Errorf("auth.resource_metadata_url is required")
 	}

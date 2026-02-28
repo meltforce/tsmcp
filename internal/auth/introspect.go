@@ -120,7 +120,9 @@ func (v *IntrospectionValidator) introspect(ctx context.Context, token string) (
 		return nil, fmt.Errorf("creating introspection request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetBasicAuth(v.clientID, v.clientSecret)
+	if v.clientID != "" {
+		req.SetBasicAuth(v.clientID, v.clientSecret)
+	}
 
 	resp, err := v.client.Do(req)
 	if err != nil {

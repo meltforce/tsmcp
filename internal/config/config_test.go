@@ -316,8 +316,6 @@ auth:
   issuer: "https://idp.example.com"
   audience: "https://mcp.example.com"
   introspection_url: "https://idp.example.com/introspect"
-  client_id: "my-client"
-  client_secret: "my-secret"
   resource_metadata_url: "https://mcp.example.com/.well-known/oauth-protected-resource"
 `
 	tests := []struct {
@@ -327,8 +325,6 @@ auth:
 		{name: "missing issuer", remove: "issuer"},
 		{name: "missing audience", remove: "audience"},
 		{name: "missing introspection_url", remove: "introspection_url"},
-		{name: "missing client_id", remove: "client_id"},
-		{name: "missing client_secret", remove: "client_secret"},
 		{name: "missing resource_metadata_url", remove: "resource_metadata_url"},
 	}
 
