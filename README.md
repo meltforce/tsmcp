@@ -1,5 +1,7 @@
 # tsmcp — MCP Tailnet Bridge
 
+> **Disclaimer:** This is an independent community project and is not affiliated with, endorsed by, or officially connected to Tailscale Inc.
+
 A Go reverse proxy that exposes private [MCP](https://modelcontextprotocol.io/) servers on your [Tailscale](https://tailscale.com/) network to [Claude.ai](https://claude.ai) via a single public FQDN — with OAuth authentication powered by Tailscale's identity provider (tsidp).
 
 ## How It Works
