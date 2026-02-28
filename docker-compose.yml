@@ -1,13 +1,13 @@
 services:
-  mcp-bridge:
+  tsmcp:
     image: meltforce/tsmcp:edge
     container_name: tsmcp
     restart: unless-stopped
     environment:
       - TS_AUTHKEY=${TS_AUTHKEY}
     volumes:
-      - ./config.yaml:/etc/mcp-bridge/config.yaml:ro
-      - tsnet-state:/var/lib/mcp-bridge/tsnet
+      - ./config.yaml:/etc/tsmcp/config.yaml:ro
+      - tsnet-state:/var/lib/tsmcp/tsnet
     networks:
       - proxy
     cap_drop:

@@ -106,10 +106,10 @@ The tsmcp bridge node needs to reach both tsidp and the MCP servers:
 
 ```jsonc
 // Allow the bridge to introspect tokens at tsidp
-{ "src": ["tag:mcp-bridge"], "dst": ["tag:idp"], "ip": ["tcp:443"] }
+{ "src": ["tag:tsmcp"], "dst": ["tag:idp"], "ip": ["tcp:443"] }
 
 // Allow the bridge to reach MCP servers
-{ "src": ["tag:mcp-bridge"], "dst": ["tag:mcp-server"], "ip": ["tcp:443"] }
+{ "src": ["tag:tsmcp"], "dst": ["tag:mcp-server"], "ip": ["tcp:443"] }
 ```
 
 ## Features
@@ -158,7 +158,7 @@ Go to the [Tailscale admin console](https://login.tailscale.com/admin/settings/k
 
 - **Reusable**: Yes (survives container restarts)
 - **Ephemeral**: Optional (node auto-removes when container stops)
-- **Tags**: e.g., `tag:mcp-bridge` (for ACL rules)
+- **Tags**: e.g., `tag:tsmcp` (for ACL rules)
 
 ### Step 3: Create the config file
 
@@ -170,8 +170,8 @@ server:
     - "https://claude.com"
 
 tailnet:
-  hostname: "mcp-bridge"
-  state_dir: "/var/lib/mcp-bridge/tsnet"
+  hostname: "tsmcp"
+  state_dir: "/var/lib/tsmcp/tsnet"
   authkey_env: "TS_AUTHKEY"
 
 auth:
@@ -194,15 +194,15 @@ The `auth` section is optional — omit it entirely to run without authenticatio
 
 ```yaml
 services:
-  mcp-bridge:
+  tsmcp:
     image: meltforce/tsmcp:edge
     container_name: tsmcp
     restart: unless-stopped
     environment:
       - TS_AUTHKEY=tskey-auth-...
     volumes:
-      - ./config.yaml:/etc/mcp-bridge/config.yaml:ro
-      - tsnet-state:/var/lib/mcp-bridge/tsnet
+      - ./config.yaml:/etc/tsmcp/config.yaml:ro
+      - tsnet-state:/var/lib/tsmcp/tsnet
     networks:
       - proxy-net
     cap_drop:
@@ -335,6 +335,7 @@ Notes:
 | `target` | Yes | Upstream MCP server URL (Tailscale FQDN). Must be `http` or `https`. |
 | `description` | No | Human-readable description for logging. |
 | `enabled` | No | Set to `false` to disable. Default: `true`. |
+| `upstream_token_env` | No | Environment variable holding a Bearer token to set on upstream requests. |
 
 ## Health Check
 

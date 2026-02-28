@@ -11,13 +11,17 @@ import (
 )
 
 func newTestProxy(t *testing.T, upstream *httptest.Server) http.Handler {
+	return newTestProxyWithToken(t, upstream, "")
+}
+
+func newTestProxyWithToken(t *testing.T, upstream *httptest.Server, upstreamToken string) http.Handler {
 	t.Helper()
 	target, err := url.Parse(upstream.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	transport := NewTailnetTransport(NewDirectDialer())
-	return NewHandler(target, transport, slog.Default())
+	return NewHandler(target, transport, upstreamToken, slog.Default())
 }
 
 func TestProxyJSONResponse(t *testing.T) {
@@ -165,6 +169,31 @@ func TestProxyStripsAuthorizationHeader(t *testing.T) {
 	}
 	if gotAuth != "" {
 		t.Errorf("upstream received Authorization = %q, want empty (should be stripped)", gotAuth)
+	}
+}
+
+func TestProxyUpstreamTokenInjected(t *testing.T) {
+	var gotAuth string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
+	}))
+	defer upstream.Close()
+
+	handler := newTestProxyWithToken(t, upstream, "ha-secret-token")
+	req := httptest.NewRequest(http.MethodPost, "/mcp/test", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer oauth-token")
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	if gotAuth != "Bearer ha-secret-token" {
+		t.Errorf("upstream Authorization = %q, want %q", gotAuth, "Bearer ha-secret-token")
 	}
 }
 

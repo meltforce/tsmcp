@@ -13,7 +13,7 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /tsmcp .
 FROM alpine:3.20
 
 RUN apk add --no-cache ca-certificates tzdata \
-    && adduser -D -u 1000 mcp-bridge
+    && adduser -D -u 1000 tsmcp
 
 ARG VERSION=dev
 LABEL org.opencontainers.image.version="${VERSION}"
@@ -22,10 +22,10 @@ LABEL org.opencontainers.image.description="MCP Tailnet Bridge"
 
 COPY --from=builder /tsmcp /usr/local/bin/tsmcp
 
-USER mcp-bridge
+USER tsmcp
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \
     CMD wget -qO- http://127.0.0.1:8900/healthz || exit 1
 
 ENTRYPOINT ["tsmcp"]
-CMD ["-config", "/etc/mcp-bridge/config.yaml"]
+CMD ["-config", "/etc/tsmcp/config.yaml"]

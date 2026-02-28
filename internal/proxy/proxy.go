@@ -9,7 +9,8 @@ import (
 )
 
 // NewHandler creates an MCP reverse proxy handler for the given target.
-func NewHandler(target *url.URL, transport http.RoundTripper, logger *slog.Logger) http.Handler {
+// If upstreamToken is non-empty, it is set as a Bearer token on upstream requests.
+func NewHandler(target *url.URL, transport http.RoundTripper, upstreamToken string, logger *slog.Logger) http.Handler {
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(target)
@@ -20,6 +21,9 @@ func NewHandler(target *url.URL, transport http.RoundTripper, logger *slog.Logge
 			r.Out.Host = target.Host
 			r.SetXForwarded()
 			r.Out.Header.Del("Authorization")
+			if upstreamToken != "" {
+				r.Out.Header.Set("Authorization", "Bearer "+upstreamToken)
+			}
 		},
 		Transport:     transport,
 		FlushInterval: -1, // flush every write — safety net for SSE

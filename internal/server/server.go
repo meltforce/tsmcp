@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"time"
 
 	"github.com/meltforce/tsmcp/internal/auth"
@@ -45,7 +46,12 @@ func New(cfg *config.Config, transport http.RoundTripper, checker health.Checker
 			return nil, fmt.Errorf("parsing target for %s: %w", ep.Path, err)
 		}
 
-		var handler http.Handler = proxy.NewHandler(target, transport, logger)
+		var upstreamToken string
+		if ep.UpstreamTokenEnv != "" {
+			upstreamToken = os.Getenv(ep.UpstreamTokenEnv)
+		}
+
+		var handler http.Handler = proxy.NewHandler(target, transport, upstreamToken, logger)
 
 		// Wrap with auth when validator is present
 		if validator != nil {

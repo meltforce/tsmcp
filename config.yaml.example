@@ -5,22 +5,23 @@ server:
     - "https://claude.com"
 
 tailnet:
-  hostname: "mcp-bridge"
-  state_dir: "/var/lib/mcp-bridge/tsnet"
+  hostname: "tsmcp"
+  state_dir: "/var/lib/tsmcp/tsnet"
   authkey_env: "TS_AUTHKEY"
 
-# Optional: JWT auth via Tailscale identity provider (tsidp).
-# Omit this section entirely for authless mode (Phase 1 behavior).
+# Optional: OAuth auth via Tailscale identity provider (tsidp).
+# Omit this section entirely for authless mode.
 # auth:
-#   issuer: "https://login.tailscale.com/oidc"
-#   audience: "https://mcp.meltforce.org"
-#   jwks_url: "https://login.tailscale.com/oidc/jwks"
-#   resource_metadata_url: "https://mcp.meltforce.org/.well-known/oauth-protected-resource"
+#   issuer: "https://idp.your-tailnet.ts.net"
+#   audience: "https://mcp.example.com"
+#   introspection_url: "https://idp.your-tailnet.ts.net/introspect"
+#   resource_metadata_url: "https://mcp.example.com/.well-known/oauth-protected-resource"
 
 endpoints:
-  - path: "/mcp/health"
-    target: "http://freeresp:3001/mcp"
-    description: "Health Data MCP Server"
-  - path: "/mcp/infra"
-    target: "http://homelab-mcp:3000/mcp"
-    description: "Infrastructure Management"
+  - path: "/mcp/my-server"
+    target: "https://my-server.your-tailnet.ts.net/mcp"
+    description: "My MCP Server"
+  - path: "/mcp/with-auth"
+    target: "https://authed-server.your-tailnet.ts.net/api/mcp"
+    description: "Server requiring upstream auth"
+    upstream_token_env: "UPSTREAM_SERVER_TOKEN"

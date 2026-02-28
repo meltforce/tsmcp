@@ -38,10 +38,11 @@ type TailnetConfig struct {
 }
 
 type EndpointConfig struct {
-	Path        string `yaml:"path"`
-	Target      string `yaml:"target"`
-	Description string `yaml:"description"`
-	Enabled     *bool  `yaml:"enabled,omitempty"`
+	Path             string `yaml:"path"`
+	Target           string `yaml:"target"`
+	Description      string `yaml:"description"`
+	Enabled          *bool  `yaml:"enabled,omitempty"`
+	UpstreamTokenEnv string `yaml:"upstream_token_env,omitempty"`
 }
 
 func (e *EndpointConfig) IsEnabled() bool {

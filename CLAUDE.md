@@ -29,7 +29,7 @@
 - Introspection goes through tsnet — ACLs control which nodes can validate tokens
 - Audience validation (fail-closed): tokens with `aud` claim not matching expected audience are rejected; tokens without `aud` are also rejected when `expectedAudience` is set
 - Issuer validation (fail-closed): tokens with `iss` claim not matching expected issuer are rejected; tokens without `iss` are also rejected when `expectedIssuer` is set
-- Authorization header stripped before proxying to upstream — tokens never leak to backend MCP servers
+- Inbound Authorization header stripped before proxying; optional per-endpoint upstream Bearer token set via `upstream_token_env`
 - A stranger cannot complete the OAuth flow even though tsidp is publicly reachable via Funnel
 
 ### Auth package (`internal/auth/`)
@@ -62,7 +62,7 @@
 
 ## Deployment (on nihilist VPS)
 - Docker image builds, CI/CD deploys, Caddy route at `mcp.meltforce.net`
-- tsnet bridge joins tailnet as `mcp-bridge`, auth enabled with tsidp introspection
+- tsnet bridge joins tailnet as `tsmcp`, auth enabled with tsidp introspection
 - Claude.ai connector configured and working with OAuth
 - SSH: `root@nihilist`; container: `tsmcp`
 - Config: `/opt/docker/stacks/tsmcp/config.yaml`
@@ -83,7 +83,7 @@
 ## Structure
 ```
 internal/
-  config/     — YAML config loading + validation (AuthConfig, ServerConfig, TailnetConfig, EndpointConfig)
+  config/     — YAML config loading + validation (AuthConfig, ServerConfig, TailnetConfig, EndpointConfig w/ UpstreamTokenEnv)
   auth/       — Token introspection middleware + RFC 9728 metadata handler + Audience type
   proxy/      — Reverse proxy handler (SSE-aware) + Tailnet transport
   tsbridge/   — Tailscale network bridge (tsnet)
