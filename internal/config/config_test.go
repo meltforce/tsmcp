@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -264,10 +265,12 @@ endpoints:
   - path: "/mcp/test"
     target: "http://test:3000/mcp"
 auth:
-  issuer: "https://login.tailscale.com/oidc"
-  audience: "https://mcp.meltforce.org"
-  jwks_url: "https://login.tailscale.com/oidc/jwks"
-  resource_metadata_url: "https://mcp.meltforce.org/.well-known/oauth-protected-resource"
+  issuer: "https://idp.leo-royal.ts.net"
+  audience: "https://mcp.meltforce.net"
+  introspection_url: "https://idp.leo-royal.ts.net/introspect"
+  client_id: "my-client"
+  client_secret: "my-secret"
+  resource_metadata_url: "https://mcp.meltforce.net/.well-known/oauth-protected-resource"
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -276,16 +279,22 @@ auth:
 	if cfg.Auth == nil {
 		t.Fatal("auth should not be nil")
 	}
-	if cfg.Auth.Issuer != "https://login.tailscale.com/oidc" {
+	if cfg.Auth.Issuer != "https://idp.leo-royal.ts.net" {
 		t.Errorf("issuer = %q", cfg.Auth.Issuer)
 	}
-	if cfg.Auth.Audience != "https://mcp.meltforce.org" {
+	if cfg.Auth.Audience != "https://mcp.meltforce.net" {
 		t.Errorf("audience = %q", cfg.Auth.Audience)
 	}
-	if cfg.Auth.JWKSURL != "https://login.tailscale.com/oidc/jwks" {
-		t.Errorf("jwks_url = %q", cfg.Auth.JWKSURL)
+	if cfg.Auth.IntrospectionURL != "https://idp.leo-royal.ts.net/introspect" {
+		t.Errorf("introspection_url = %q", cfg.Auth.IntrospectionURL)
 	}
-	if cfg.Auth.ResourceMetadataURL != "https://mcp.meltforce.org/.well-known/oauth-protected-resource" {
+	if cfg.Auth.ClientID != "my-client" {
+		t.Errorf("client_id = %q", cfg.Auth.ClientID)
+	}
+	if cfg.Auth.ClientSecret != "my-secret" {
+		t.Errorf("client_secret = %q", cfg.Auth.ClientSecret)
+	}
+	if cfg.Auth.ResourceMetadataURL != "https://mcp.meltforce.net/.well-known/oauth-protected-resource" {
 		t.Errorf("resource_metadata_url = %q", cfg.Auth.ResourceMetadataURL)
 	}
 }
@@ -303,47 +312,37 @@ endpoints:
     target: "http://test:3000/mcp"
 auth:
 `
+	allFields := `
+  issuer: "https://idp.example.com"
+  audience: "https://mcp.example.com"
+  introspection_url: "https://idp.example.com/introspect"
+  client_id: "my-client"
+  client_secret: "my-secret"
+  resource_metadata_url: "https://mcp.example.com/.well-known/oauth-protected-resource"
+`
 	tests := []struct {
 		name   string
-		config string
+		remove string
 	}{
-		{
-			name: "missing issuer",
-			config: base + `
-  audience: "https://mcp.meltforce.org"
-  jwks_url: "https://login.tailscale.com/oidc/jwks"
-  resource_metadata_url: "https://mcp.meltforce.org/.well-known/oauth-protected-resource"
-`,
-		},
-		{
-			name: "missing audience",
-			config: base + `
-  issuer: "https://login.tailscale.com/oidc"
-  jwks_url: "https://login.tailscale.com/oidc/jwks"
-  resource_metadata_url: "https://mcp.meltforce.org/.well-known/oauth-protected-resource"
-`,
-		},
-		{
-			name: "missing jwks_url",
-			config: base + `
-  issuer: "https://login.tailscale.com/oidc"
-  audience: "https://mcp.meltforce.org"
-  resource_metadata_url: "https://mcp.meltforce.org/.well-known/oauth-protected-resource"
-`,
-		},
-		{
-			name: "missing resource_metadata_url",
-			config: base + `
-  issuer: "https://login.tailscale.com/oidc"
-  audience: "https://mcp.meltforce.org"
-  jwks_url: "https://login.tailscale.com/oidc/jwks"
-`,
-		},
+		{name: "missing issuer", remove: "issuer"},
+		{name: "missing audience", remove: "audience"},
+		{name: "missing introspection_url", remove: "introspection_url"},
+		{name: "missing client_id", remove: "client_id"},
+		{name: "missing client_secret", remove: "client_secret"},
+		{name: "missing resource_metadata_url", remove: "resource_metadata_url"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			path := writeConfig(t, tt.config)
+			// Build config with one field removed
+			cfg := base
+			for _, line := range strings.Split(allFields, "\n") {
+				if line == "" || strings.Contains(line, tt.remove+":") {
+					continue
+				}
+				cfg += line + "\n"
+			}
+			path := writeConfig(t, cfg)
 			_, err := Load(path)
 			if err == nil {
 				t.Fatalf("expected error for %s", tt.name)
@@ -352,7 +351,7 @@ auth:
 	}
 }
 
-func TestRejectInvalidJWKSURL(t *testing.T) {
+func TestRejectInvalidIntrospectionURL(t *testing.T) {
 	path := writeConfig(t, `
 server:
   listen: "127.0.0.1:8900"
@@ -364,18 +363,20 @@ endpoints:
   - path: "/mcp/test"
     target: "http://test:3000/mcp"
 auth:
-  issuer: "https://login.tailscale.com/oidc"
-  audience: "https://mcp.meltforce.org"
-  jwks_url: "not-a-url"
-  resource_metadata_url: "https://mcp.meltforce.org/.well-known/oauth-protected-resource"
+  issuer: "https://idp.example.com"
+  audience: "https://mcp.example.com"
+  introspection_url: "not-a-url"
+  client_id: "my-client"
+  client_secret: "my-secret"
+  resource_metadata_url: "https://mcp.example.com/.well-known/oauth-protected-resource"
 `)
 	_, err := Load(path)
 	if err == nil {
-		t.Fatal("expected error for invalid JWKS URL")
+		t.Fatal("expected error for invalid introspection URL")
 	}
 }
 
-func TestRejectFTPJWKSURL(t *testing.T) {
+func TestRejectFTPIntrospectionURL(t *testing.T) {
 	path := writeConfig(t, `
 server:
   listen: "127.0.0.1:8900"
@@ -387,14 +388,16 @@ endpoints:
   - path: "/mcp/test"
     target: "http://test:3000/mcp"
 auth:
-  issuer: "https://login.tailscale.com/oidc"
-  audience: "https://mcp.meltforce.org"
-  jwks_url: "ftp://login.tailscale.com/oidc/jwks"
-  resource_metadata_url: "https://mcp.meltforce.org/.well-known/oauth-protected-resource"
+  issuer: "https://idp.example.com"
+  audience: "https://mcp.example.com"
+  introspection_url: "ftp://idp.example.com/introspect"
+  client_id: "my-client"
+  client_secret: "my-secret"
+  resource_metadata_url: "https://mcp.example.com/.well-known/oauth-protected-resource"
 `)
 	_, err := Load(path)
 	if err == nil {
-		t.Fatal("expected error for FTP JWKS URL")
+		t.Fatal("expected error for FTP introspection URL")
 	}
 }
 

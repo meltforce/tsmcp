@@ -20,7 +20,9 @@ type Config struct {
 type AuthConfig struct {
 	Issuer              string `yaml:"issuer"`
 	Audience            string `yaml:"audience"`
-	JWKSURL             string `yaml:"jwks_url"`
+	IntrospectionURL    string `yaml:"introspection_url"`
+	ClientID            string `yaml:"client_id"`
+	ClientSecret        string `yaml:"client_secret"`
 	ResourceMetadataURL string `yaml:"resource_metadata_url"`
 }
 
@@ -93,15 +95,21 @@ func (c *Config) validateAuth() error {
 	if c.Auth.Audience == "" {
 		return fmt.Errorf("auth.audience is required")
 	}
-	if c.Auth.JWKSURL == "" {
-		return fmt.Errorf("auth.jwks_url is required")
+	if c.Auth.IntrospectionURL == "" {
+		return fmt.Errorf("auth.introspection_url is required")
 	}
-	u, err := url.Parse(c.Auth.JWKSURL)
+	u, err := url.Parse(c.Auth.IntrospectionURL)
 	if err != nil {
-		return fmt.Errorf("auth.jwks_url is not a valid URL: %w", err)
+		return fmt.Errorf("auth.introspection_url is not a valid URL: %w", err)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("auth.jwks_url must use http or https scheme, got %q", u.Scheme)
+		return fmt.Errorf("auth.introspection_url must use http or https scheme, got %q", u.Scheme)
+	}
+	if c.Auth.ClientID == "" {
+		return fmt.Errorf("auth.client_id is required")
+	}
+	if c.Auth.ClientSecret == "" {
+		return fmt.Errorf("auth.client_secret is required")
 	}
 	if c.Auth.ResourceMetadataURL == "" {
 		return fmt.Errorf("auth.resource_metadata_url is required")

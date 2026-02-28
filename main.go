@@ -56,19 +56,19 @@ func run(ctx context.Context, configPath string, logger *slog.Logger) error {
 	// Create transport using tsnet dialer
 	transport := proxy.NewTailnetTransport(bridge)
 
-	// Create JWT validator if auth is configured
-	var jwtValidator *auth.JWTValidator
+	// Create introspection validator if auth is configured
+	var validator *auth.IntrospectionValidator
 	if cfg.Auth != nil {
-		jwtValidator, err = auth.NewJWTValidator(ctx, cfg.Auth.JWKSURL, cfg.Auth.Issuer, cfg.Auth.Audience, cfg.Auth.ResourceMetadataURL, transport, logger)
-		if err != nil {
-			return err
-		}
-		defer jwtValidator.Close()
-		logger.Info("jwt validation enabled", "issuer", cfg.Auth.Issuer, "audience", cfg.Auth.Audience)
+		validator = auth.NewIntrospectionValidator(
+			cfg.Auth.IntrospectionURL, cfg.Auth.ClientID, cfg.Auth.ClientSecret,
+			cfg.Auth.ResourceMetadataURL, transport, logger,
+		)
+		defer validator.Close()
+		logger.Info("token introspection enabled", "issuer", cfg.Auth.Issuer, "introspection_url", cfg.Auth.IntrospectionURL)
 	}
 
 	// Assemble HTTP server
-	srv, err := server.New(cfg, transport, bridge, jwtValidator, logger)
+	srv, err := server.New(cfg, transport, bridge, validator, logger)
 	if err != nil {
 		return err
 	}

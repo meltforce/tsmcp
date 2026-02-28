@@ -1,13 +1,8 @@
 package server
 
 import (
-	"context"
-	"crypto/rand"
-	"crypto/rsa"
-	"encoding/base64"
 	"encoding/json"
 	"log/slog"
-	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/meltforce/tsmcp/internal/auth"
 	"github.com/meltforce/tsmcp/internal/config"
 	"github.com/meltforce/tsmcp/internal/proxy"
@@ -192,61 +186,49 @@ func TestDisabledEndpoint(t *testing.T) {
 
 // --- Auth integration tests ---
 
-func setupTestJWKS(t *testing.T) (jwksURL string, key *rsa.PrivateKey, kid string) {
-	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("generating RSA key: %v", err)
-	}
-
-	n := base64.RawURLEncoding.EncodeToString(key.PublicKey.N.Bytes())
-	e := base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.PublicKey.E)).Bytes())
-
-	jwks := map[string]any{
-		"keys": []map[string]any{{
-			"kty": "RSA", "alg": "RS256", "use": "sig", "kid": "test-key-1",
-			"n": n, "e": e,
-		}},
-	}
-	jwksJSON, _ := json.Marshal(jwks)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(jwksJSON)
-	}))
-	t.Cleanup(srv.Close)
-	return srv.URL, key, "test-key-1"
-}
-
-func signToken(t *testing.T, key *rsa.PrivateKey, kid string, claims jwt.MapClaims) string {
-	t.Helper()
-	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	token.Header["kid"] = kid
-	signed, err := token.SignedString(key)
-	if err != nil {
-		t.Fatalf("signing token: %v", err)
-	}
-	return signed
-}
-
 const (
 	testIssuer   = "https://idp.example.com"
 	testAudience = "https://mcp.example.com"
 	testMetadata = "https://mcp.example.com/.well-known/oauth-protected-resource"
+	testClientID = "test-client"
+	testSecret   = "test-secret"
 )
 
-func testAuthConfig() *config.AuthConfig {
+func setupIntrospectionServer(t *testing.T, active bool) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if active {
+			json.NewEncoder(w).Encode(map[string]any{
+				"active":     true,
+				"sub":        "user@example.com",
+				"client_id":  testClientID,
+				"token_type": "bearer",
+				"exp":        time.Now().Add(time.Hour).Unix(),
+			})
+		} else {
+			json.NewEncoder(w).Encode(map[string]any{"active": false})
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func testAuthConfig(introspectionURL string) *config.AuthConfig {
 	return &config.AuthConfig{
 		Issuer:              testIssuer,
 		Audience:            testAudience,
-		JWKSURL:             "https://placeholder", // overridden per-test
+		IntrospectionURL:    introspectionURL,
+		ClientID:            testClientID,
+		ClientSecret:        testSecret,
 		ResourceMetadataURL: testMetadata,
 	}
 }
 
 func TestMetadataEndpointRegistered(t *testing.T) {
+	introspSrv := setupIntrospectionServer(t, true)
 	cfg := testConfig()
-	cfg.Auth = testAuthConfig()
+	cfg.Auth = testAuthConfig(introspSrv.URL)
 
 	transport := proxy.NewTailnetTransport(proxy.NewDirectDialer())
 	checker := &mockHealthChecker{ready: true}
@@ -295,15 +277,11 @@ func TestMetadataEndpointAbsentWithoutAuth(t *testing.T) {
 }
 
 func TestHealthzBypassesAuth(t *testing.T) {
-	jwksURL, _, _ := setupTestJWKS(t)
+	introspSrv := setupIntrospectionServer(t, true)
 	cfg := testConfig()
-	cfg.Auth = testAuthConfig()
-	cfg.Auth.JWKSURL = jwksURL
+	cfg.Auth = testAuthConfig(introspSrv.URL)
 
-	v, err := auth.NewJWTValidator(context.Background(), jwksURL, testIssuer, testAudience, testMetadata, nil, slog.Default())
-	if err != nil {
-		t.Fatal(err)
-	}
+	v := auth.NewIntrospectionValidator(introspSrv.URL, testClientID, testSecret, testMetadata, nil, slog.Default())
 	defer v.Close()
 
 	transport := proxy.NewTailnetTransport(proxy.NewDirectDialer())
@@ -325,10 +303,9 @@ func TestHealthzBypassesAuth(t *testing.T) {
 }
 
 func TestMCPEndpointRequiresAuth(t *testing.T) {
-	jwksURL, _, _ := setupTestJWKS(t)
+	introspSrv := setupIntrospectionServer(t, true)
 	cfg := testConfig()
-	cfg.Auth = testAuthConfig()
-	cfg.Auth.JWKSURL = jwksURL
+	cfg.Auth = testAuthConfig(introspSrv.URL)
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -336,10 +313,7 @@ func TestMCPEndpointRequiresAuth(t *testing.T) {
 	defer upstream.Close()
 	cfg.Endpoints[0].Target = upstream.URL
 
-	v, err := auth.NewJWTValidator(context.Background(), jwksURL, testIssuer, testAudience, testMetadata, nil, slog.Default())
-	if err != nil {
-		t.Fatal(err)
-	}
+	v := auth.NewIntrospectionValidator(introspSrv.URL, testClientID, testSecret, testMetadata, nil, slog.Default())
 	defer v.Close()
 
 	transport := proxy.NewTailnetTransport(proxy.NewDirectDialer())
@@ -361,10 +335,9 @@ func TestMCPEndpointRequiresAuth(t *testing.T) {
 }
 
 func TestMCPEndpointWithValidToken(t *testing.T) {
-	jwksURL, key, kid := setupTestJWKS(t)
+	introspSrv := setupIntrospectionServer(t, true)
 	cfg := testConfig()
-	cfg.Auth = testAuthConfig()
-	cfg.Auth.JWKSURL = jwksURL
+	cfg.Auth = testAuthConfig(introspSrv.URL)
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -373,10 +346,7 @@ func TestMCPEndpointWithValidToken(t *testing.T) {
 	defer upstream.Close()
 	cfg.Endpoints[0].Target = upstream.URL
 
-	v, err := auth.NewJWTValidator(context.Background(), jwksURL, testIssuer, testAudience, testMetadata, nil, slog.Default())
-	if err != nil {
-		t.Fatal(err)
-	}
+	v := auth.NewIntrospectionValidator(introspSrv.URL, testClientID, testSecret, testMetadata, nil, slog.Default())
 	defer v.Close()
 
 	transport := proxy.NewTailnetTransport(proxy.NewDirectDialer())
@@ -387,15 +357,8 @@ func TestMCPEndpointWithValidToken(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	token := signToken(t, key, kid, jwt.MapClaims{
-		"iss": testIssuer,
-		"aud": testAudience,
-		"exp": time.Now().Add(time.Hour).Unix(),
-		"sub": "user@example.com",
-	})
-
 	req := httptest.NewRequest(http.MethodPost, "/mcp/test", strings.NewReader(`{}`))
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", "Bearer opaque-test-token")
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	srv.Handler.ServeHTTP(w, req)

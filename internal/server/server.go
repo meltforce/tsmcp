@@ -14,7 +14,7 @@ import (
 )
 
 // New creates the HTTP server with all routes and middleware wired up.
-func New(cfg *config.Config, transport http.RoundTripper, checker health.Checker, jwtValidator *auth.JWTValidator, logger *slog.Logger) (*http.Server, error) {
+func New(cfg *config.Config, transport http.RoundTripper, checker health.Checker, validator *auth.IntrospectionValidator, logger *slog.Logger) (*http.Server, error) {
 	mux := http.NewServeMux()
 
 	// Health check — always unauthenticated
@@ -47,9 +47,9 @@ func New(cfg *config.Config, transport http.RoundTripper, checker health.Checker
 
 		var handler http.Handler = proxy.NewHandler(target, transport, logger)
 
-		// Wrap with JWT auth when validator is present
-		if jwtValidator != nil {
-			handler = jwtValidator.Middleware()(handler)
+		// Wrap with auth when validator is present
+		if validator != nil {
+			handler = validator.Middleware()(handler)
 		}
 
 		mux.Handle("POST "+ep.Path, handler)
