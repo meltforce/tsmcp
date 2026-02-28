@@ -26,15 +26,10 @@ Each path in the config maps to a separate Claude.ai custom connector. One deplo
 
 - **Tailscale account** with at least one MCP server on the tailnet
 - **tsidp** running on your tailnet with [Funnel enabled](https://tailscale.com/kb/1240/sso-custom-oidc/) — Claude.ai must reach it over the public internet for OAuth
-- **VPS or server** ("the host") with Docker installed, joined to your Tailscale tailnet
+- **VPS or server** with a **public IP**, Docker installed, and joined to your Tailscale tailnet
 - **Domain name** pointed at the host (e.g., `mcp.example.com`)
 - **Caddy** (or another reverse proxy) for TLS termination — must support SSE flush
-- **Tailscale ACLs** allowing the bridge node to reach tsidp and your MCP servers:
-
-```jsonc
-{ "src": ["tag:tsmcp"], "dst": ["tag:idp"], "ip": ["tcp:443"] }
-{ "src": ["tag:tsmcp"], "dst": ["tag:mcp-server"], "ip": ["tcp:443"] }
-```
+- **Tailscale ACLs** allowing the bridge node to reach tsidp and your MCP servers (see [example ACL](#example-tailscale-acl) below)
 
 ## Setup Guide
 
@@ -58,10 +53,10 @@ curl -s -X POST https://idp.YOUR-TAILNET.ts.net/register \
 
 ### 2. Generate a Tailscale auth key
 
-Go to the [Tailscale admin console](https://login.tailscale.com/admin/settings/keys) and generate a reusable auth key. This allows tsmcp's embedded tsnet node to join your tailnet.
+Go to the [Tailscale admin console](https://login.tailscale.com/admin/settings/keys) and generate an auth key. This allows tsmcp's embedded tsnet node to join your tailnet.
 
-- **Reusable**: Yes (survives container restarts)
-- **Ephemeral**: Optional (node auto-removes when container stops)
+- **Reusable**: Optional — tsnet state is persisted to a Docker volume, so the node re-authenticates automatically after the first start
+- **Ephemeral**: No — the bridge node must remain registered so ACL rules and tsidp access continue to work
 - **Tags**: e.g., `tag:tsmcp` (for ACL rules)
 
 ### 3. Create the config file
@@ -152,10 +147,25 @@ mcp.example.com {
     reverse_proxy tsmcp:8900 {
         flush_interval -1
     }
+
+    log {
+        output file /var/log/caddy/mcp-access.log {
+            roll_size 10MiB
+            roll_keep 3
+            roll_keep_for 168h
+        }
+        format json
+    }
+
+    header {
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        -Server
+    }
 }
 ```
 
-Caddy handles TLS automatically via Let's Encrypt.
+Caddy handles TLS automatically via Let's Encrypt. The `header` block adds HSTS, prevents MIME-type sniffing, and strips the `Server` header.
 
 ### 6. Add the Claude.ai connector
 
@@ -274,6 +284,58 @@ tsmcp ──proxy──▶ https://my-mcp-server.your-tailnet.ts.net/mcp  (via t
 - **Tokens are opaque** — tsidp issues opaque access tokens (not JWTs), so they can only be validated via introspection
 - **Introspection goes through tsnet** — tsmcp dials tsidp over the tailnet, so ACLs control which nodes can validate tokens
 - A stranger cannot complete the OAuth flow: they can discover tsidp (via resource metadata), but they cannot register a client or authorize because those operations require tailnet access
+
+### Example Tailscale ACL
+
+The bridge node needs to reach both tsidp (for token introspection) and the MCP servers (for proxying). tsidp also needs an app grant so that clients can register and users can authorize:
+
+```jsonc
+// Tag definitions
+"tagOwners": {
+    "tag:tsmcp": ["autogroup:admin"],  // MCP bridge
+    "tag:idp":   ["autogroup:admin"],  // Tailscale identity provider
+    "tag:mcp":   ["autogroup:admin"],  // MCP servers
+},
+
+"acls": [
+    // Allow the bridge to reach MCP servers
+    {
+        "src": ["tag:tsmcp"],
+        "dst": ["tag:mcp"],
+        "ip":  ["tcp:443"],
+    },
+
+    // tsidp — admin access (admin UI + DCR)
+    {
+        "src": ["autogroup:admin"],
+        "dst": ["tag:idp"],
+        "app": {
+            "tailscale.com/cap/tsidp": [{
+                "allow_admin_ui": true,
+                "allow_dcr":      true,
+                "resources":      ["*"],
+                "scopes":         ["openid", "email", "profile"],
+                "users":          ["*"],
+            }],
+        },
+    },
+
+    // tsidp — all tailnet users (DCR only, no admin UI)
+    {
+        "src": ["*"],
+        "dst": ["tag:idp"],
+        "app": {
+            "tailscale.com/cap/tsidp": [{
+                "allow_admin_ui": false,
+                "allow_dcr":      true,
+                "resources":      ["*"],
+                "scopes":         ["openid", "email", "profile"],
+                "users":          ["*"],
+            }],
+        },
+    },
+]
+```
 
 ## Features
 
