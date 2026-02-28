@@ -25,7 +25,7 @@ Each path in the config maps to a separate Claude.ai custom connector. One deplo
 ## Prerequisites
 
 - **Tailscale account** with at least one MCP server on the tailnet
-- **tsidp** running on your tailnet with [Funnel enabled](https://tailscale.com/kb/1240/sso-custom-oidc/) — Claude.ai must reach it over the public internet for OAuth
+- **tsidp** running on your tailnet with [Funnel enabled](https://tailscale.com/docs/features/tailscale-funnel) — Claude.ai must reach it over the public internet for OAuth
 - **VPS or server** with a **public IP**, Docker installed, and joined to your Tailscale tailnet
 - **Domain name** pointed at the host (e.g., `mcp.example.com`)
 - **Caddy** (or another reverse proxy) for TLS termination — must support SSE flush
@@ -373,12 +373,12 @@ The bridge node needs to reach both tsidp (for token introspection) and the MCP 
 | `issuer` | Yes | tsidp issuer URL (your tailnet's IDP). |
 | `audience` | Yes | Your bridge's public URL. |
 | `introspection_url` | Yes | tsidp introspection endpoint. Must be `http` or `https`. |
-| `client_id` | No | Client ID for authenticating introspection requests. |
-| `client_secret` | No | Client secret for introspection auth. |
+| `client_id` | Yes | Client ID from DCR registration (Step 1). Used to authenticate introspection requests. |
+| `client_secret` | Yes | Client secret from DCR registration. Used to authenticate introspection requests. |
 | `resource_metadata_url` | Yes | Public URL of the RFC 9728 metadata endpoint. |
 
 Notes:
-- `client_id` and `client_secret` are only needed if tsidp requires authentication for introspection calls. Tailscale's tsidp currently allows unauthenticated introspection.
+- `client_id` and `client_secret` are the credentials obtained from registering a client with tsidp (Step 1). They are used both by Claude.ai for the OAuth flow and by tsmcp to authenticate token introspection requests via HTTP Basic Auth.
 - The `introspection_url` must be reachable from inside the container. Since tsidp resolves to a Tailscale IP, tsmcp routes introspection requests through its embedded tsnet node automatically.
 - Active introspection results are cached for 60 seconds (or until token expiry, whichever is shorter) to reduce round-trips.
 
