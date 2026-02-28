@@ -8,7 +8,7 @@ A Go reverse proxy that exposes private [MCP](https://modelcontextprotocol.io/) 
 
 ```
                                                     ┌──Tailnet──▶ MCP Server A
-Claude.ai ──HTTPS──▶ Caddy ──HTTP──▶ tsmcp ────────┤
+claude.ai ──HTTPS──▶ Caddy ──HTTP──▶ tsmcp ────────┤
      │                                 │            └──Tailnet──▶ MCP Server B
      │                                 │
      │                                 └──Tailnet──▶ tsidp (/introspect)
