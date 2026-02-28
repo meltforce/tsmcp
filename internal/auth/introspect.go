@@ -35,9 +35,11 @@ type IntrospectionClaims struct {
 type Audience []string
 
 // Contains reports whether the audience list includes the given value.
+// Trailing slashes are ignored during comparison to tolerate issuer variance.
 func (a Audience) Contains(s string) bool {
+	s = strings.TrimRight(s, "/")
 	for _, v := range a {
-		if v == s {
+		if strings.TrimRight(v, "/") == s {
 			return true
 		}
 	}

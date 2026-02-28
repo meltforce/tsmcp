@@ -339,6 +339,9 @@ func TestAudienceContains(t *testing.T) {
 		{name: "no match", aud: Audience{"https://a.com"}, s: "https://b.com", want: false},
 		{name: "empty audience", aud: Audience{}, s: "https://a.com", want: false},
 		{name: "nil audience", aud: nil, s: "https://a.com", want: false},
+		{name: "trailing slash in aud", aud: Audience{"https://mcp.example.com/"}, s: "https://mcp.example.com", want: true},
+		{name: "trailing slash in expected", aud: Audience{"https://mcp.example.com"}, s: "https://mcp.example.com/", want: true},
+		{name: "trailing slash in both", aud: Audience{"https://mcp.example.com/"}, s: "https://mcp.example.com/", want: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
