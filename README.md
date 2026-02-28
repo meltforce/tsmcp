@@ -23,20 +23,38 @@ Each path in the config maps to a separate Claude.ai custom connector. One deplo
 
 - **Path-based routing** — single domain, multiple MCP servers
 - **SSE streaming** — automatic flush for Server-Sent Events
-- **Optional JWT auth** — validate tokens from Tailscale's identity provider (tsidp)
+- **Optional OAuth auth** — validate opaque tokens via RFC 7662 introspection against tsidp
 - **RFC 9728 metadata** — `/.well-known/oauth-protected-resource` endpoint
 - **Origin validation** — restrict to `claude.ai` / `claude.com`
 - **Health check** — `/healthz` with tsnet readiness
 - **Structured logging** — JSON via `slog`
 - **Hardened Docker** — read-only root, cap_drop ALL, unprivileged user
 
-## Quick Start
+## Deployment Guide
 
-### 1. Create a config file
+### Prerequisites
+
+- A VPS or server (the "host") with Docker installed
+- A [Tailscale](https://tailscale.com/) account with at least one MCP server on the tailnet
+- A domain name pointed at the host (e.g., `mcp.example.com`)
+- [Caddy](https://caddyserver.com/) (or another reverse proxy) for TLS termination
+- [tsidp](https://tailscale.com/kb/1240/sso-custom-oidc/) enabled on your tailnet (only needed for auth)
+
+### Step 1: Generate a Tailscale auth key
+
+Go to the [Tailscale admin console](https://login.tailscale.com/admin/settings/keys) and generate a reusable auth key. This allows tsmcp's embedded tsnet node to join your tailnet.
+
+- **Reusable**: Yes (survives container restarts)
+- **Ephemeral**: Optional (node auto-removes when container stops)
+- **Tags**: Optional (e.g., `tag:mcp-bridge`)
+
+Save the key — you'll need it for the config.
+
+### Step 2: Create the config file
 
 ```yaml
 server:
-  listen: "127.0.0.1:8900"
+  listen: "0.0.0.0:8900"
   allowed_origins:
     - "https://claude.ai"
     - "https://claude.com"
@@ -46,49 +64,44 @@ tailnet:
   state_dir: "/var/lib/mcp-bridge/tsnet"
   authkey_env: "TS_AUTHKEY"
 
-# Optional: JWT auth via Tailscale identity provider.
-# Omit this section entirely for authless mode.
-# auth:
-#   issuer: "https://login.tailscale.com/oidc"
-#   audience: "https://mcp.example.com"
-#   jwks_url: "https://login.tailscale.com/oidc/jwks"
-#   resource_metadata_url: "https://mcp.example.com/.well-known/oauth-protected-resource"
-
 endpoints:
-  - path: "/mcp/health"
-    target: "http://freeresp:3001/mcp"
-    description: "Health Data MCP Server"
-
-  - path: "/mcp/infra"
-    target: "http://homelab-mcp:3000/mcp"
-    description: "Infrastructure Management"
+  - path: "/mcp/my-server"
+    target: "https://my-mcp-server.my-tailnet.ts.net/mcp"
+    description: "My MCP Server"
 ```
 
-### 2. Run with Docker Compose
+The `target` is the Tailscale FQDN (or MagicDNS name) of the MCP server on your tailnet. tsmcp dials it over Tailscale — the MCP server does not need to be publicly accessible.
+
+### Step 3: Create the Docker Compose file
 
 ```yaml
-# docker-compose.yml
 services:
   mcp-bridge:
     image: meltforce/tsmcp:edge
     container_name: tsmcp
     restart: unless-stopped
     environment:
-      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_AUTHKEY=tskey-auth-...
     volumes:
       - ./config.yaml:/etc/mcp-bridge/config.yaml:ro
       - tsnet-state:/var/lib/mcp-bridge/tsnet
     networks:
       - proxy-net
-    security_opt:
-      - no-new-privileges:true
     cap_drop:
       - ALL
     cap_add:
       - NET_RAW
+    security_opt:
+      - no-new-privileges:true
     read_only: true
     tmpfs:
       - /tmp:noexec,nosuid,size=64m
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8900/healthz"]
+      interval: 10s
+      timeout: 3s
+      start_period: 30s
+      retries: 3
 
 volumes:
   tsnet-state:
@@ -98,12 +111,22 @@ networks:
     external: true
 ```
 
+Notes:
+- `tsnet-state` volume persists the Tailscale node state across restarts
+- `proxy-net` is an external Docker network shared with Caddy so it can reach tsmcp by container name
+- `TS_AUTHKEY` is only needed on first start; after tsnet saves state, the node re-authenticates automatically
+- `NET_RAW` capability is required by tsnet's userspace networking
+
+Start it:
+
 ```bash
-export TS_AUTHKEY="tskey-auth-..."
+docker network create proxy-net  # if it doesn't exist yet
 docker compose up -d
 ```
 
-### 3. Add a Caddy route
+### Step 4: Configure Caddy
+
+Add a route for your domain. The `flush_interval -1` is critical for SSE streaming:
 
 ```
 mcp.example.com {
@@ -113,9 +136,101 @@ mcp.example.com {
 }
 ```
 
-### 4. Add as Claude.ai custom connector
+Caddy handles TLS automatically via Let's Encrypt.
 
-In Claude.ai settings, add a custom MCP connector pointing to `https://mcp.example.com/mcp/health` (or whichever endpoint path you configured).
+### Step 5: Add the Claude.ai connector
+
+In [Claude.ai](https://claude.ai) settings → Integrations → Add custom integration:
+
+- **URL**: `https://mcp.example.com/mcp/my-server`
+- **Name**: Whatever you want
+
+If auth is **disabled** (no `auth:` section in config), the connector will work immediately.
+
+If auth is **enabled**, Claude.ai will discover the OAuth flow via the `/.well-known/oauth-protected-resource` endpoint and redirect you to tsidp to authorize. See the Auth section below.
+
+### Step 6: Verify
+
+```bash
+# Health check
+curl https://mcp.example.com/healthz
+# → {"status":"ok","tsnet_connected":true}
+
+# Container logs
+docker logs tsmcp --tail 20
+```
+
+## Enabling Auth (Optional)
+
+Auth uses Tailscale's identity provider (tsidp) to authenticate users via OAuth. tsmcp validates tokens by calling tsidp's [introspection endpoint](https://www.rfc-editor.org/rfc/rfc7662) (RFC 7662).
+
+### How the flow works
+
+```
+Claude.ai ──▶ GET /.well-known/oauth-protected-resource
+          ◀── 200 { "resource": "...", "authorization_servers": ["..."] }
+
+Claude.ai ──▶ [discovers tsidp, redirects user to authorize]
+          ◀── [user authorizes, Claude.ai gets opaque access token]
+
+Claude.ai ──▶ POST /mcp/my-server
+               Authorization: Bearer <opaque-token>
+
+tsmcp     ──▶ POST https://idp.your-tailnet.ts.net/introspect
+               token=<opaque-token>
+          ◀── {"active": true, "sub": "user@example.com", ...}
+
+tsmcp     ──▶ [proxies request to MCP server]
+```
+
+### Enable tsidp
+
+tsidp must be enabled on your tailnet. Check if it's available:
+
+```bash
+curl -s https://idp.YOUR-TAILNET.ts.net/.well-known/openid-configuration | jq .
+```
+
+If this returns OIDC discovery metadata, tsidp is active. Note the `introspection_endpoint` URL.
+
+### Add auth to config
+
+```yaml
+auth:
+  issuer: "https://idp.your-tailnet.ts.net"
+  audience: "https://mcp.example.com"
+  introspection_url: "https://idp.your-tailnet.ts.net/introspect"
+  resource_metadata_url: "https://mcp.example.com/.well-known/oauth-protected-resource"
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `issuer` | Yes | tsidp issuer URL (your tailnet's IDP). |
+| `audience` | Yes | Your bridge's public URL. |
+| `introspection_url` | Yes | tsidp introspection endpoint. Must be `http` or `https`. |
+| `client_id` | No | Client ID for authenticating introspection requests (if tsidp requires it). |
+| `client_secret` | No | Client secret for introspection auth. |
+| `resource_metadata_url` | Yes | Public URL of the RFC 9728 metadata endpoint. |
+
+Notes:
+- `client_id` and `client_secret` are only needed if tsidp requires authentication for introspection calls. Tailscale's tsidp currently allows unauthenticated introspection.
+- The `introspection_url` must be reachable from inside the container. Since tsidp resolves to a Tailscale IP, tsmcp routes introspection requests through its embedded tsnet node automatically.
+- Active introspection results are cached for 60 seconds (or until token expiry, whichever is shorter) to reduce round-trips.
+
+### Unauthenticated routes
+
+These routes never require auth, even when the `auth:` section is configured:
+- `GET /healthz`
+- `GET /.well-known/oauth-protected-resource`
+
+### Unauthorized responses
+
+Requests without a valid token get:
+
+```
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource"
+```
 
 ## Configuration Reference
 
@@ -134,17 +249,6 @@ In Claude.ai settings, add a custom MCP connector pointing to `https://mcp.examp
 | `state_dir` | Yes | Directory for tsnet persistent state. |
 | `authkey_env` | Yes | Environment variable containing the Tailscale auth key. |
 
-### `auth` (optional)
-
-Omit entirely for authless mode. When present, all four fields are required.
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `issuer` | Yes | Expected `iss` claim (tsidp OIDC URL). |
-| `audience` | Yes | Expected `aud` claim (bridge's public URL). |
-| `jwks_url` | Yes | JWKS endpoint for public key verification. Must be `http` or `https`. |
-| `resource_metadata_url` | Yes | Public URL of the RFC 9728 metadata endpoint. |
-
 ### `endpoints`
 
 | Field | Required | Description |
@@ -153,33 +257,6 @@ Omit entirely for authless mode. When present, all four fields are required.
 | `target` | Yes | Upstream MCP server URL. Must be `http` or `https`. |
 | `description` | No | Human-readable description for logging. |
 | `enabled` | No | Set to `false` to disable. Default: `true`. |
-
-## Auth Flow
-
-When the `auth` section is configured:
-
-```
-Client ──▶ GET /.well-known/oauth-protected-resource
-       ◀── 200 { "resource": "...", "authorization_servers": ["..."] }
-
-Client ──▶ [obtains token from tsidp]
-
-Client ──▶ POST /mcp/health
-            Authorization: Bearer <jwt>
-       ◀── 200 (proxied response)
-```
-
-Without a valid token:
-
-```
-Client ──▶ POST /mcp/health
-       ◀── 401 Unauthorized
-            WWW-Authenticate: Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource"
-```
-
-Routes that never require auth:
-- `GET /healthz`
-- `GET /.well-known/oauth-protected-resource`
 
 ## Health Check
 
@@ -210,10 +287,9 @@ go build -o tsmcp .
 
 ```
 ├── main.go                           # Entry point, lifecycle management
-├── config.yaml.example               # Configuration template
 ├── internal/
 │   ├── config/                       # YAML config loading + validation
-│   ├── auth/                         # JWT middleware + RFC 9728 metadata
+│   ├── auth/                         # Token introspection + RFC 9728 metadata
 │   ├── proxy/                        # Reverse proxy handler + transport
 │   ├── tsbridge/                     # Tailscale network bridge (tsnet)
 │   ├── health/                       # Health check endpoint
