@@ -3,7 +3,7 @@
 ## Project
 - Go reverse proxy exposing private MCP servers on Tailscale to Claude.ai
 - Module: `github.com/meltforce/tsmcp`
-- Repo: `github.com/meltforce/tsmcp` (private)
+- Repo: `github.com/meltforce/tsmcp`
 - Go 1.25+ (upgraded by tailscale.com dependency)
 - Key deps: `tailscale.com` (tsnet), `gopkg.in/yaml.v3`
 
@@ -60,13 +60,6 @@
 - **Release workflow** (`.github/workflows/release.yml`): tag push → latest + versioned tag + GitHub release
 - CI pattern: Tailscale GitHub Action with `tag:ci`, direct `ssh root@host` over Tailscale SSH (no SSH keys)
 
-## Deployment (on nihilist VPS)
-- Docker image builds, CI/CD deploys, Caddy route at `mcp.meltforce.net`
-- tsnet bridge joins tailnet as `tsmcp`, auth enabled with tsidp introspection
-- Claude.ai connector configured and working with OAuth
-- SSH: `root@nihilist`; container: `tsmcp`
-- Config: `/opt/docker/stacks/tsmcp/config.yaml`
-
 ## Gotchas
 - Go 1.25 ServeMux: `{$}` must be its own path segment after `/`, can't append to non-slash path. Paths without trailing slash already match exactly — just omit `{$}`.
 - tailscale.com pulls in large dep tree and forced Go 1.25+
@@ -76,7 +69,7 @@
 - **Introspection MUST use tsnet transport** — tsidp resolves to a Tailscale IP (`100.x.x.x`), unreachable from Docker's network. Pass the tsnet transport to `NewIntrospectionValidator`, never `nil` in production.
 - tsidp `aud` claim is a JSON array, not a string — the `Audience` type handles both forms
 - tsidp is publicly reachable via Tailscale Funnel (public DNS → Tailscale edge IP, MagicDNS → Tailscale IP) but v0.0.12 blocks DCR over Funnel despite ACL grant
-- RFC 9728 `resource` field must be the server origin (e.g. `https://mcp.meltforce.net`), not the metadata URL path
+- RFC 9728 `resource` field must be the server origin (e.g. `https://mcp.example.com`), not the metadata URL path
 - tsidp supports `client_secret_post` and `client_secret_basic` auth methods; we use `client_secret_basic`
 - ACL rule required: bridge node → tsidp on tcp:443
 

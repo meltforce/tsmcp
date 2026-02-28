@@ -29,7 +29,7 @@ tailnet:
   authkey_env: "TS_AUTHKEY"
 endpoints:
   - path: "/mcp/health"
-    target: "http://freeresp:3001/mcp"
+    target: "http://my-server:3001/mcp"
     description: "Health Data MCP Server"
 `)
 	cfg, err := Load(path)
@@ -265,12 +265,12 @@ endpoints:
   - path: "/mcp/test"
     target: "http://test:3000/mcp"
 auth:
-  issuer: "https://idp.leo-royal.ts.net"
-  audience: "https://mcp.meltforce.net"
-  introspection_url: "https://idp.leo-royal.ts.net/introspect"
+  issuer: "https://idp.example-tailnet.ts.net"
+  audience: "https://mcp.example.com"
+  introspection_url: "https://idp.example-tailnet.ts.net/introspect"
   client_id: "my-client"
   client_secret: "my-secret"
-  resource_metadata_url: "https://mcp.meltforce.net/.well-known/oauth-protected-resource"
+  resource_metadata_url: "https://mcp.example.com/.well-known/oauth-protected-resource"
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -279,13 +279,13 @@ auth:
 	if cfg.Auth == nil {
 		t.Fatal("auth should not be nil")
 	}
-	if cfg.Auth.Issuer != "https://idp.leo-royal.ts.net" {
+	if cfg.Auth.Issuer != "https://idp.example-tailnet.ts.net" {
 		t.Errorf("issuer = %q", cfg.Auth.Issuer)
 	}
-	if cfg.Auth.Audience != "https://mcp.meltforce.net" {
+	if cfg.Auth.Audience != "https://mcp.example.com" {
 		t.Errorf("audience = %q", cfg.Auth.Audience)
 	}
-	if cfg.Auth.IntrospectionURL != "https://idp.leo-royal.ts.net/introspect" {
+	if cfg.Auth.IntrospectionURL != "https://idp.example-tailnet.ts.net/introspect" {
 		t.Errorf("introspection_url = %q", cfg.Auth.IntrospectionURL)
 	}
 	if cfg.Auth.ClientID != "my-client" {
@@ -294,7 +294,7 @@ auth:
 	if cfg.Auth.ClientSecret != "my-secret" {
 		t.Errorf("client_secret = %q", cfg.Auth.ClientSecret)
 	}
-	if cfg.Auth.ResourceMetadataURL != "https://mcp.meltforce.net/.well-known/oauth-protected-resource" {
+	if cfg.Auth.ResourceMetadataURL != "https://mcp.example.com/.well-known/oauth-protected-resource" {
 		t.Errorf("resource_metadata_url = %q", cfg.Auth.ResourceMetadataURL)
 	}
 }

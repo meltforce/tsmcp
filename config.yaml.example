@@ -16,6 +16,8 @@ tailnet:
 #   audience: "https://mcp.example.com"
 #   introspection_url: "https://idp.your-tailnet.ts.net/introspect"
 #   resource_metadata_url: "https://mcp.example.com/.well-known/oauth-protected-resource"
+#   client_id: "your-client-id"
+#   client_secret: "your-client-secret"
 
 endpoints:
   - path: "/mcp/my-server"

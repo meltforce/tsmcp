@@ -1,4 +1,26 @@
+# Binary
 tsmcp
+
+# Config (may contain secrets)
 config.yaml
 *.env
 .env
+
+# Go
+*.test
+*.out
+coverage.*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# tsnet state (if running locally outside Docker)
+tsnet-*/
