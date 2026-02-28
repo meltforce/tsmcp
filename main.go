@@ -59,16 +59,12 @@ func run(ctx context.Context, configPath string, logger *slog.Logger) error {
 	// Create introspection validator if auth is configured
 	var validator *auth.IntrospectionValidator
 	if cfg.Auth != nil {
-		var introspectTransport http.RoundTripper
-		if cfg.Auth.IntrospectionViaTailnet {
-			introspectTransport = transport
-		}
 		validator = auth.NewIntrospectionValidator(
 			cfg.Auth.IntrospectionURL, cfg.Auth.ClientID, cfg.Auth.ClientSecret,
-			cfg.Auth.ResourceMetadataURL, introspectTransport, logger,
+			cfg.Auth.ResourceMetadataURL, transport, logger,
 		)
 		defer validator.Close()
-		logger.Info("token introspection enabled", "issuer", cfg.Auth.Issuer, "introspection_url", cfg.Auth.IntrospectionURL, "via_tailnet", cfg.Auth.IntrospectionViaTailnet)
+		logger.Info("token introspection enabled", "issuer", cfg.Auth.Issuer, "introspection_url", cfg.Auth.IntrospectionURL)
 	}
 
 	// Assemble HTTP server

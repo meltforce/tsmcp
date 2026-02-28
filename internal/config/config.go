@@ -18,13 +18,12 @@ type Config struct {
 }
 
 type AuthConfig struct {
-	Issuer                  string `yaml:"issuer"`
-	Audience                string `yaml:"audience"`
-	IntrospectionURL        string `yaml:"introspection_url"`
-	ClientID                string `yaml:"client_id"`
-	ClientSecret            string `yaml:"client_secret"`
-	ResourceMetadataURL     string `yaml:"resource_metadata_url"`
-	IntrospectionViaTailnet bool   `yaml:"introspection_via_tailnet"`
+	Issuer              string `yaml:"issuer"`
+	Audience            string `yaml:"audience"`
+	IntrospectionURL    string `yaml:"introspection_url"`
+	ClientID            string `yaml:"client_id"`
+	ClientSecret        string `yaml:"client_secret"`
+	ResourceMetadataURL string `yaml:"resource_metadata_url"`
 }
 
 type ServerConfig struct {

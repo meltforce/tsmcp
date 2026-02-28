@@ -297,36 +297,6 @@ auth:
 	if cfg.Auth.ResourceMetadataURL != "https://mcp.meltforce.net/.well-known/oauth-protected-resource" {
 		t.Errorf("resource_metadata_url = %q", cfg.Auth.ResourceMetadataURL)
 	}
-	if cfg.Auth.IntrospectionViaTailnet {
-		t.Error("introspection_via_tailnet should default to false")
-	}
-}
-
-func TestAuthConfigIntrospectionViaTailnet(t *testing.T) {
-	path := writeConfig(t, `
-server:
-  listen: "127.0.0.1:8900"
-tailnet:
-  hostname: "mcp-bridge"
-  state_dir: "/tmp/tsnet"
-  authkey_env: "TS_AUTHKEY"
-endpoints:
-  - path: "/mcp/test"
-    target: "http://test:3000/mcp"
-auth:
-  issuer: "https://idp.leo-royal.ts.net"
-  audience: "https://mcp.meltforce.net"
-  introspection_url: "https://idp.leo-royal.ts.net/introspect"
-  resource_metadata_url: "https://mcp.meltforce.net/.well-known/oauth-protected-resource"
-  introspection_via_tailnet: true
-`)
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !cfg.Auth.IntrospectionViaTailnet {
-		t.Error("introspection_via_tailnet should be true")
-	}
 }
 
 func TestRejectMissingAuthFields(t *testing.T) {
