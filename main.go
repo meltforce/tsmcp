@@ -61,7 +61,7 @@ func run(ctx context.Context, configPath string, logger *slog.Logger) error {
 	if cfg.Auth != nil {
 		validator = auth.NewIntrospectionValidator(
 			cfg.Auth.IntrospectionURL, cfg.Auth.ClientID, cfg.Auth.ClientSecret,
-			cfg.Auth.ResourceMetadataURL, transport, logger,
+			cfg.Auth.ResourceMetadataURL, nil, logger,
 		)
 		defer validator.Close()
 		logger.Info("token introspection enabled", "issuer", cfg.Auth.Issuer, "introspection_url", cfg.Auth.IntrospectionURL)
