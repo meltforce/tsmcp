@@ -72,7 +72,7 @@ func New(cfg *config.Config, transport http.RoundTripper, checker health.Checker
 		Addr:         cfg.Server.Listen,
 		Handler:      handler,
 		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 0, // SSE streams are long-lived
+		WriteTimeout: 120 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}, nil
 }

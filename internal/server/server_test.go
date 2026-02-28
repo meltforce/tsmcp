@@ -54,8 +54,8 @@ func TestServerCreation(t *testing.T) {
 	if srv.Addr != "127.0.0.1:0" {
 		t.Errorf("addr = %q, want 127.0.0.1:0", srv.Addr)
 	}
-	if srv.WriteTimeout != 0 {
-		t.Errorf("write timeout = %v, want 0", srv.WriteTimeout)
+	if srv.WriteTimeout != 120*time.Second {
+		t.Errorf("write timeout = %v, want 120s", srv.WriteTimeout)
 	}
 }
 
@@ -281,7 +281,7 @@ func TestHealthzBypassesAuth(t *testing.T) {
 	cfg := testConfig()
 	cfg.Auth = testAuthConfig(introspSrv.URL)
 
-	v := auth.NewIntrospectionValidator(introspSrv.URL, testClientID, testSecret, testMetadata, nil, slog.Default())
+	v := auth.NewIntrospectionValidator(introspSrv.URL, testClientID, testSecret, testMetadata, "", "", nil, slog.Default())
 	defer v.Close()
 
 	transport := proxy.NewTailnetTransport(proxy.NewDirectDialer())
@@ -313,7 +313,7 @@ func TestMCPEndpointRequiresAuth(t *testing.T) {
 	defer upstream.Close()
 	cfg.Endpoints[0].Target = upstream.URL
 
-	v := auth.NewIntrospectionValidator(introspSrv.URL, testClientID, testSecret, testMetadata, nil, slog.Default())
+	v := auth.NewIntrospectionValidator(introspSrv.URL, testClientID, testSecret, testMetadata, "", "", nil, slog.Default())
 	defer v.Close()
 
 	transport := proxy.NewTailnetTransport(proxy.NewDirectDialer())
@@ -346,7 +346,7 @@ func TestMCPEndpointWithValidToken(t *testing.T) {
 	defer upstream.Close()
 	cfg.Endpoints[0].Target = upstream.URL
 
-	v := auth.NewIntrospectionValidator(introspSrv.URL, testClientID, testSecret, testMetadata, nil, slog.Default())
+	v := auth.NewIntrospectionValidator(introspSrv.URL, testClientID, testSecret, testMetadata, "", "", nil, slog.Default())
 	defer v.Close()
 
 	transport := proxy.NewTailnetTransport(proxy.NewDirectDialer())

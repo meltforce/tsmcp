@@ -40,7 +40,7 @@ func inactiveResponse() map[string]any {
 
 func newTestValidator(t *testing.T, introspectionURL string) *IntrospectionValidator {
 	t.Helper()
-	v := NewIntrospectionValidator(introspectionURL, testClientID, testSecret, testMetadata, nil, slog.Default())
+	v := NewIntrospectionValidator(introspectionURL, testClientID, testSecret, testMetadata, "", "", nil, slog.Default())
 	t.Cleanup(v.Close)
 	return v
 }
@@ -327,6 +327,241 @@ func TestBasicAuthSentToIntrospectionEndpoint(t *testing.T) {
 	}
 }
 
+func TestAudienceContains(t *testing.T) {
+	tests := []struct {
+		name string
+		aud  Audience
+		s    string
+		want bool
+	}{
+		{name: "single match", aud: Audience{"https://mcp.example.com"}, s: "https://mcp.example.com", want: true},
+		{name: "multi match", aud: Audience{"https://a.com", "https://b.com"}, s: "https://b.com", want: true},
+		{name: "no match", aud: Audience{"https://a.com"}, s: "https://b.com", want: false},
+		{name: "empty audience", aud: Audience{}, s: "https://a.com", want: false},
+		{name: "nil audience", aud: nil, s: "https://a.com", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.aud.Contains(tt.s); got != tt.want {
+				t.Errorf("Contains(%q) = %v, want %v", tt.s, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAudienceMismatchRejected(t *testing.T) {
+	srv := setupIntrospectionServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"active":     true,
+			"sub":        "user@example.com",
+			"aud":        []string{"https://other-resource.com"},
+			"client_id":  testClientID,
+			"token_type": "bearer",
+			"exp":        time.Now().Add(time.Hour).Unix(),
+		})
+	})
+
+	v := NewIntrospectionValidator(srv.URL, testClientID, testSecret, testMetadata, "https://mcp.example.com", "", nil, slog.Default())
+	t.Cleanup(v.Close)
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("next handler should not be called")
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp/test", nil)
+	req.Header.Set("Authorization", "Bearer aud-mismatch-token")
+	w := httptest.NewRecorder()
+
+	v.Middleware()(next).ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", w.Code)
+	}
+}
+
+func TestAudienceMatchAccepted(t *testing.T) {
+	srv := setupIntrospectionServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"active":     true,
+			"sub":        "user@example.com",
+			"aud":        []string{"https://mcp.example.com", "https://other.com"},
+			"client_id":  testClientID,
+			"token_type": "bearer",
+			"exp":        time.Now().Add(time.Hour).Unix(),
+		})
+	})
+
+	v := NewIntrospectionValidator(srv.URL, testClientID, testSecret, testMetadata, "https://mcp.example.com", "", nil, slog.Default())
+	t.Cleanup(v.Close)
+
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp/test", nil)
+	req.Header.Set("Authorization", "Bearer aud-match-token")
+	w := httptest.NewRecorder()
+
+	v.Middleware()(next).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	if !called {
+		t.Error("next handler was not called")
+	}
+}
+
+func TestMissingAudienceRejectedWhenExpected(t *testing.T) {
+	// Introspection response has no aud — should be rejected when expectedAudience is set (fail-closed)
+	srv := setupIntrospectionServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(activeResponse("user@example.com", time.Now().Add(time.Hour).Unix()))
+	})
+
+	v := NewIntrospectionValidator(srv.URL, testClientID, testSecret, testMetadata, "https://mcp.example.com", "", nil, slog.Default())
+	t.Cleanup(v.Close)
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("next handler should not be called")
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp/test", nil)
+	req.Header.Set("Authorization", "Bearer no-aud-token")
+	w := httptest.NewRecorder()
+
+	v.Middleware()(next).ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", w.Code)
+	}
+}
+
+func TestNoExpectedAudienceSkipsCheck(t *testing.T) {
+	// No expectedAudience configured — any token audience is allowed
+	srv := setupIntrospectionServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(activeResponse("user@example.com", time.Now().Add(time.Hour).Unix()))
+	})
+
+	v := NewIntrospectionValidator(srv.URL, testClientID, testSecret, testMetadata, "", "", nil, slog.Default())
+	t.Cleanup(v.Close)
+
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp/test", nil)
+	req.Header.Set("Authorization", "Bearer any-aud-token")
+	w := httptest.NewRecorder()
+
+	v.Middleware()(next).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	if !called {
+		t.Error("next handler was not called")
+	}
+}
+
+func TestIssuerMismatchRejected(t *testing.T) {
+	srv := setupIntrospectionServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"active":     true,
+			"sub":        "user@example.com",
+			"iss":        "https://wrong-issuer.com",
+			"client_id":  testClientID,
+			"token_type": "bearer",
+			"exp":        time.Now().Add(time.Hour).Unix(),
+		})
+	})
+
+	v := NewIntrospectionValidator(srv.URL, testClientID, testSecret, testMetadata, "", "https://expected-issuer.com", nil, slog.Default())
+	t.Cleanup(v.Close)
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("next handler should not be called")
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp/test", nil)
+	req.Header.Set("Authorization", "Bearer iss-mismatch-token")
+	w := httptest.NewRecorder()
+
+	v.Middleware()(next).ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", w.Code)
+	}
+}
+
+func TestMissingIssuerRejectedWhenExpected(t *testing.T) {
+	srv := setupIntrospectionServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(activeResponse("user@example.com", time.Now().Add(time.Hour).Unix()))
+	})
+
+	v := NewIntrospectionValidator(srv.URL, testClientID, testSecret, testMetadata, "", "https://expected-issuer.com", nil, slog.Default())
+	t.Cleanup(v.Close)
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("next handler should not be called")
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp/test", nil)
+	req.Header.Set("Authorization", "Bearer no-iss-token")
+	w := httptest.NewRecorder()
+
+	v.Middleware()(next).ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", w.Code)
+	}
+}
+
+func TestIssuerMatchAccepted(t *testing.T) {
+	srv := setupIntrospectionServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"active":     true,
+			"sub":        "user@example.com",
+			"iss":        "https://expected-issuer.com",
+			"client_id":  testClientID,
+			"token_type": "bearer",
+			"exp":        time.Now().Add(time.Hour).Unix(),
+		})
+	})
+
+	v := NewIntrospectionValidator(srv.URL, testClientID, testSecret, testMetadata, "", "https://expected-issuer.com", nil, slog.Default())
+	t.Cleanup(v.Close)
+
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp/test", nil)
+	req.Header.Set("Authorization", "Bearer iss-match-token")
+	w := httptest.NewRecorder()
+
+	v.Middleware()(next).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	if !called {
+		t.Error("next handler was not called")
+	}
+}
+
 func TestExtractBearerToken(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -335,6 +570,9 @@ func TestExtractBearerToken(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "valid", auth: "Bearer abc123", want: "abc123"},
+		{name: "lowercase bearer", auth: "bearer abc123", want: "abc123"},
+		{name: "uppercase bearer", auth: "BEARER abc123", want: "abc123"},
+		{name: "mixed case bearer", auth: "bEaReR abc123", want: "abc123"},
 		{name: "missing", auth: "", wantErr: true},
 		{name: "non-bearer", auth: "Basic abc123", wantErr: true},
 		{name: "empty token", auth: "Bearer ", wantErr: true},

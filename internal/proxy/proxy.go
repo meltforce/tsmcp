@@ -19,6 +19,7 @@ func NewHandler(target *url.URL, transport http.RoundTripper, logger *slog.Logge
 			r.Out.URL.RawPath = target.RawPath
 			r.Out.Host = target.Host
 			r.SetXForwarded()
+			r.Out.Header.Del("Authorization")
 		},
 		Transport:     transport,
 		FlushInterval: -1, // flush every write — safety net for SSE

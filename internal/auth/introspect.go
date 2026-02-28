@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -33,6 +34,16 @@ type IntrospectionClaims struct {
 // Audience handles the "aud" claim which can be a string or an array of strings.
 type Audience []string
 
+// Contains reports whether the audience list includes the given value.
+func (a Audience) Contains(s string) bool {
+	for _, v := range a {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *Audience) UnmarshalJSON(data []byte) error {
 	var s string
 	if err := json.Unmarshal(data, &s); err == nil {
@@ -58,6 +69,8 @@ type IntrospectionValidator struct {
 	clientID            string
 	clientSecret        string
 	resourceMetadataURL string
+	expectedAudience    string
+	expectedIssuer      string
 	client              *http.Client
 	logger              *slog.Logger
 
@@ -67,16 +80,20 @@ type IntrospectionValidator struct {
 
 // NewIntrospectionValidator creates a validator that checks tokens against an introspection endpoint.
 // If transport is non-nil, introspection requests use it (e.g. tsnet); nil falls back to the default HTTP client.
-func NewIntrospectionValidator(introspectionURL, clientID, clientSecret, resourceMetadataURL string, transport http.RoundTripper, logger *slog.Logger) *IntrospectionValidator {
-	client := http.DefaultClient
+// expectedAudience, when non-empty, enables audience validation (fail-closed: tokens without aud are rejected).
+// expectedIssuer, when non-empty, enables issuer validation (fail-closed: tokens without iss are rejected).
+func NewIntrospectionValidator(introspectionURL, clientID, clientSecret, resourceMetadataURL, expectedAudience, expectedIssuer string, transport http.RoundTripper, logger *slog.Logger) *IntrospectionValidator {
+	client := &http.Client{Timeout: 10 * time.Second}
 	if transport != nil {
-		client = &http.Client{Transport: transport}
+		client.Transport = transport
 	}
 	return &IntrospectionValidator{
 		introspectionURL:    introspectionURL,
 		clientID:            clientID,
 		clientSecret:        clientSecret,
 		resourceMetadataURL: resourceMetadataURL,
+		expectedAudience:    expectedAudience,
+		expectedIssuer:      expectedIssuer,
 		client:              client,
 		logger:              logger,
 		cache:               make(map[string]*cacheEntry),
@@ -108,6 +125,16 @@ func (v *IntrospectionValidator) Middleware() func(http.Handler) http.Handler {
 			}
 			if !claims.Active {
 				v.unauthorized(w, "token is not active")
+				return
+			}
+			if v.expectedAudience != "" && (len(claims.Aud) == 0 || !claims.Aud.Contains(v.expectedAudience)) {
+				v.logger.Warn("audience mismatch", "expected", v.expectedAudience, "got", []string(claims.Aud))
+				v.unauthorized(w, "token audience mismatch")
+				return
+			}
+			if v.expectedIssuer != "" && (claims.Iss == "" || claims.Iss != v.expectedIssuer) {
+				v.logger.Warn("issuer mismatch", "expected", v.expectedIssuer, "got", claims.Iss)
+				v.unauthorized(w, "token issuer mismatch")
 				return
 			}
 
@@ -153,7 +180,7 @@ func (v *IntrospectionValidator) introspect(ctx context.Context, token string) (
 	}
 
 	var claims IntrospectionClaims
-	if err := json.NewDecoder(resp.Body).Decode(&claims); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&claims); err != nil {
 		return nil, fmt.Errorf("decoding introspection response: %w", err)
 	}
 
@@ -190,14 +217,15 @@ func ClaimsFromContext(ctx context.Context) *IntrospectionClaims {
 }
 
 func extractBearerToken(r *http.Request) (string, error) {
-	auth := r.Header.Get("Authorization")
-	if auth == "" {
+	hdr := r.Header.Get("Authorization")
+	if hdr == "" {
 		return "", fmt.Errorf("missing authorization header")
 	}
-	if !strings.HasPrefix(auth, "Bearer ") {
+	// RFC 7235: scheme comparison is case-insensitive
+	if len(hdr) < 7 || !strings.EqualFold(hdr[:7], "bearer ") {
 		return "", fmt.Errorf("authorization header must use Bearer scheme")
 	}
-	token := strings.TrimPrefix(auth, "Bearer ")
+	token := hdr[7:]
 	if token == "" {
 		return "", fmt.Errorf("bearer token is empty")
 	}

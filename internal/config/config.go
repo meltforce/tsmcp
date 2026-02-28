@@ -105,8 +105,21 @@ func (c *Config) validateAuth() error {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return fmt.Errorf("auth.introspection_url must use http or https scheme, got %q", u.Scheme)
 	}
+	if u.Host == "" {
+		return fmt.Errorf("auth.introspection_url must have a host")
+	}
 	if c.Auth.ResourceMetadataURL == "" {
 		return fmt.Errorf("auth.resource_metadata_url is required")
+	}
+	mu, err := url.Parse(c.Auth.ResourceMetadataURL)
+	if err != nil {
+		return fmt.Errorf("auth.resource_metadata_url is not a valid URL: %w", err)
+	}
+	if mu.Scheme != "http" && mu.Scheme != "https" {
+		return fmt.Errorf("auth.resource_metadata_url must use http or https scheme, got %q", mu.Scheme)
+	}
+	if mu.Host == "" {
+		return fmt.Errorf("auth.resource_metadata_url must have a host")
 	}
 	return nil
 }

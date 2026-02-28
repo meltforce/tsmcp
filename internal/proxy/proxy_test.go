@@ -143,6 +143,31 @@ func TestProxyDELETESession(t *testing.T) {
 	}
 }
 
+func TestProxyStripsAuthorizationHeader(t *testing.T) {
+	var gotAuth string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
+	}))
+	defer upstream.Close()
+
+	handler := newTestProxy(t, upstream)
+	req := httptest.NewRequest(http.MethodPost, "/mcp/test", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer secret-token")
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	if gotAuth != "" {
+		t.Errorf("upstream received Authorization = %q, want empty (should be stripped)", gotAuth)
+	}
+}
+
 func TestProxyUpstreamError(t *testing.T) {
 	// Use a server that immediately closes connections
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

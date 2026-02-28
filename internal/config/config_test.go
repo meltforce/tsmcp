@@ -397,6 +397,84 @@ auth:
 	}
 }
 
+func TestRejectIntrospectionURLMissingHost(t *testing.T) {
+	path := writeConfig(t, `
+server:
+  listen: "127.0.0.1:8900"
+tailnet:
+  hostname: "mcp-bridge"
+  state_dir: "/tmp/tsnet"
+  authkey_env: "TS_AUTHKEY"
+endpoints:
+  - path: "/mcp/test"
+    target: "http://test:3000/mcp"
+auth:
+  issuer: "https://idp.example.com"
+  audience: "https://mcp.example.com"
+  introspection_url: "https:///introspect"
+  resource_metadata_url: "https://mcp.example.com/.well-known/oauth-protected-resource"
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for introspection_url missing host")
+	}
+	if !strings.Contains(err.Error(), "introspection_url must have a host") {
+		t.Errorf("error = %q, want mention of missing host", err)
+	}
+}
+
+func TestRejectResourceMetadataURLBadScheme(t *testing.T) {
+	path := writeConfig(t, `
+server:
+  listen: "127.0.0.1:8900"
+tailnet:
+  hostname: "mcp-bridge"
+  state_dir: "/tmp/tsnet"
+  authkey_env: "TS_AUTHKEY"
+endpoints:
+  - path: "/mcp/test"
+    target: "http://test:3000/mcp"
+auth:
+  issuer: "https://idp.example.com"
+  audience: "https://mcp.example.com"
+  introspection_url: "https://idp.example.com/introspect"
+  resource_metadata_url: "ftp://mcp.example.com/.well-known/oauth-protected-resource"
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for resource_metadata_url bad scheme")
+	}
+	if !strings.Contains(err.Error(), "resource_metadata_url must use http or https") {
+		t.Errorf("error = %q, want mention of scheme", err)
+	}
+}
+
+func TestRejectResourceMetadataURLMissingHost(t *testing.T) {
+	path := writeConfig(t, `
+server:
+  listen: "127.0.0.1:8900"
+tailnet:
+  hostname: "mcp-bridge"
+  state_dir: "/tmp/tsnet"
+  authkey_env: "TS_AUTHKEY"
+endpoints:
+  - path: "/mcp/test"
+    target: "http://test:3000/mcp"
+auth:
+  issuer: "https://idp.example.com"
+  audience: "https://mcp.example.com"
+  introspection_url: "https://idp.example.com/introspect"
+  resource_metadata_url: "https:///well-known"
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for resource_metadata_url missing host")
+	}
+	if !strings.Contains(err.Error(), "resource_metadata_url must have a host") {
+		t.Errorf("error = %q, want mention of missing host", err)
+	}
+}
+
 func TestIPv6Loopback(t *testing.T) {
 	path := writeConfig(t, `
 server:

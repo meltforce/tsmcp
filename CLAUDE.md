@@ -24,19 +24,22 @@
 - 401 responses include `WWW-Authenticate: Bearer resource_metadata="<url>"` per MCP spec
 
 ### Auth security model
-- tsidp rejects DCR (dynamic client registration) over Funnel — clients must be pre-registered from a tailnet node
+- DCR (dynamic client registration) works within the tailnet but tsidp v0.0.12 blocks `/register` over Funnel — clients must be pre-registered from a tailnet node for Claude.ai
 - The `/authorize` endpoint requires Tailscale identity — user's browser must be on the tailnet
 - Introspection goes through tsnet — ACLs control which nodes can validate tokens
+- Audience validation (fail-closed): tokens with `aud` claim not matching expected audience are rejected; tokens without `aud` are also rejected when `expectedAudience` is set
+- Issuer validation (fail-closed): tokens with `iss` claim not matching expected issuer are rejected; tokens without `iss` are also rejected when `expectedIssuer` is set
+- Authorization header stripped before proxying to upstream — tokens never leak to backend MCP servers
 - A stranger cannot complete the OAuth flow even though tsidp is publicly reachable via Funnel
 
 ### Auth package (`internal/auth/`)
 - `MetadataHandler(resource, authorizationServers)` — serves RFC 9728 JSON
-- `NewIntrospectionValidator(introspectionURL, clientID, clientSecret, resourceMetadataURL, transport, logger)` — creates validator; transport MUST be tsnet (tsidp resolves to Tailscale IP, unreachable from Docker default networking)
-- `(*IntrospectionValidator).Middleware()` — returns `func(http.Handler) http.Handler` for per-route wrapping
+- `NewIntrospectionValidator(introspectionURL, clientID, clientSecret, resourceMetadataURL, expectedAudience, expectedIssuer, transport, logger)` — creates validator; transport MUST be tsnet (tsidp resolves to Tailscale IP, unreachable from Docker default networking); expectedAudience/expectedIssuer enable fail-closed validation when non-empty; HTTP client has 10s timeout, response body limited to 1MB
+- `(*IntrospectionValidator).Middleware()` — returns `func(http.Handler) http.Handler` for per-route wrapping; checks active + audience + issuer
 - `(*IntrospectionValidator).Close()` — clears introspection cache
 - `ClaimsFromContext(ctx)` — retrieves `*IntrospectionClaims` set by middleware
 - `IntrospectionClaims` — struct with `Active`, `Sub`, `Aud` (Audience type: string or array), `Iss`, `Scope`, `ClientID`, `Username`, `TokenType`, `Exp`, `Iat`
-- `Audience` — custom `[]string` type with `UnmarshalJSON` handling both string and array forms (tsidp returns array)
+- `Audience` — custom `[]string` type with `UnmarshalJSON` handling both string and array forms (tsidp returns array), `Contains(string) bool` for membership check
 
 ### Auth config (`config.AuthConfig`)
 - `Auth *AuthConfig` in `Config` — pointer, nil when absent = authless mode
@@ -72,7 +75,7 @@
 - tsidp issues **opaque access tokens**, not JWTs — token introspection (RFC 7662) is used instead of local JWT parsing
 - **Introspection MUST use tsnet transport** — tsidp resolves to a Tailscale IP (`100.x.x.x`), unreachable from Docker's network. Pass the tsnet transport to `NewIntrospectionValidator`, never `nil` in production.
 - tsidp `aud` claim is a JSON array, not a string — the `Audience` type handles both forms
-- tsidp is publicly reachable via Tailscale Funnel (public DNS → Tailscale edge IP, MagicDNS → Tailscale IP) but rejects DCR over Funnel
+- tsidp is publicly reachable via Tailscale Funnel (public DNS → Tailscale edge IP, MagicDNS → Tailscale IP) but v0.0.12 blocks DCR over Funnel despite ACL grant
 - RFC 9728 `resource` field must be the server origin (e.g. `https://mcp.meltforce.net`), not the metadata URL path
 - tsidp supports `client_secret_post` and `client_secret_basic` auth methods; we use `client_secret_basic`
 - ACL rule required: bridge node → tsidp on tcp:443
