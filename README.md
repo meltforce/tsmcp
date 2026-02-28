@@ -6,19 +6,194 @@ A Go reverse proxy that exposes private [MCP](https://modelcontextprotocol.io/) 
 
 ```
                                                     ┌──Tailnet──▶ MCP Server A
-Claude.ai ──HTTPS──▶ Caddy ──HTTP──▶ tsmcp ────────┼──Tailnet──▶ MCP Server B
-                                       │            └──Tailnet──▶ MCP Server C
-                                       │
-                                       └──Tailnet──▶ tsidp (token introspection)
+Claude.ai ──HTTPS──▶ Caddy ──HTTP──▶ tsmcp ────────┤
+     │                                 │            └──Tailnet──▶ MCP Server B
+     │                                 │
+     │                                 └──Tailnet──▶ tsidp (/introspect)
+     │                                                 ▲
+     └──────────HTTPS (Funnel)─────────────────────────┘
+              (OAuth: discovery, authorize, token)
 ```
 
-1. Claude.ai sends MCP requests (JSON-RPC over HTTP + SSE) to your public domain
-2. Caddy terminates TLS and forwards to tsmcp
-3. tsmcp validates the OAuth token by introspecting it against tsidp over Tailscale
-4. tsmcp routes by path, dials the target MCP server over Tailscale via [tsnet](https://pkg.go.dev/tailscale.com/tsnet), and proxies the response
-5. SSE streams are flushed immediately — no buffering
+Two separate connections to tsidp serve different purposes:
+
+- **Claude.ai → tsidp** (over HTTPS/Funnel): OAuth discovery, user authorization, and token exchange. Claude.ai talks to tsidp directly — tsmcp is not involved in this leg.
+- **tsmcp → tsidp** (over Tailnet via tsnet): Token introspection (RFC 7662). On each authenticated request, tsmcp validates the opaque token by calling tsidp's `/introspect` endpoint over the tailnet.
 
 Each path in the config maps to a separate Claude.ai custom connector. One deployment serves multiple MCP servers.
+
+## Prerequisites
+
+- **Tailscale account** with at least one MCP server on the tailnet
+- **tsidp** running on your tailnet with [Funnel enabled](https://tailscale.com/kb/1240/sso-custom-oidc/) — Claude.ai must reach it over the public internet for OAuth
+- **VPS or server** ("the host") with Docker installed, joined to your Tailscale tailnet
+- **Domain name** pointed at the host (e.g., `mcp.example.com`)
+- **Caddy** (or another reverse proxy) for TLS termination — must support SSE flush
+- **Tailscale ACLs** allowing the bridge node to reach tsidp and your MCP servers:
+
+```jsonc
+{ "src": ["tag:tsmcp"], "dst": ["tag:idp"], "ip": ["tcp:443"] }
+{ "src": ["tag:tsmcp"], "dst": ["tag:mcp-server"], "ip": ["tcp:443"] }
+```
+
+## Setup Guide
+
+### 1. Register a client with tsidp
+
+From a machine on your tailnet, register an OAuth client for Claude.ai:
+
+```bash
+curl -s -X POST https://idp.YOUR-TAILNET.ts.net/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+    "client_name": "Claude.ai MCP",
+    "grant_types": ["authorization_code", "refresh_token"],
+    "response_types": ["code"],
+    "token_endpoint_auth_method": "client_secret_basic"
+  }' | python3 -m json.tool
+```
+
+**This must be done from a tailnet node** — tsidp rejects dynamic client registration over Funnel. Save the returned `client_id` and `client_secret`.
+
+### 2. Generate a Tailscale auth key
+
+Go to the [Tailscale admin console](https://login.tailscale.com/admin/settings/keys) and generate a reusable auth key. This allows tsmcp's embedded tsnet node to join your tailnet.
+
+- **Reusable**: Yes (survives container restarts)
+- **Ephemeral**: Optional (node auto-removes when container stops)
+- **Tags**: e.g., `tag:tsmcp` (for ACL rules)
+
+### 3. Create the config file
+
+```yaml
+server:
+  listen: "0.0.0.0:8900"
+  allowed_origins:
+    - "https://claude.ai"
+    - "https://claude.com"
+
+tailnet:
+  hostname: "tsmcp"
+  state_dir: "/var/lib/tsmcp/tsnet"
+  authkey_env: "TS_AUTHKEY"
+
+auth:
+  issuer: "https://idp.your-tailnet.ts.net"
+  audience: "https://mcp.example.com"
+  introspection_url: "https://idp.your-tailnet.ts.net/introspect"
+  resource_metadata_url: "https://mcp.example.com/.well-known/oauth-protected-resource"
+
+endpoints:
+  - path: "/mcp/my-server"
+    target: "https://my-mcp-server.your-tailnet.ts.net/mcp"
+    description: "My MCP Server"
+```
+
+The `target` is the Tailscale FQDN (or MagicDNS name) of the MCP server on your tailnet. tsmcp dials it over Tailscale — the MCP server does not need to be publicly accessible.
+
+The `auth` section is optional — omit it entirely to run without authentication.
+
+### 4. Docker Compose
+
+```yaml
+services:
+  tsmcp:
+    image: meltforce/tsmcp:edge
+    container_name: tsmcp
+    restart: unless-stopped
+    environment:
+      - TS_AUTHKEY=tskey-auth-...
+    volumes:
+      - ./config.yaml:/etc/tsmcp/config.yaml:ro
+      - tsnet-state:/var/lib/tsmcp/tsnet
+    networks:
+      - proxy-net
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=64m
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8900/healthz"]
+      interval: 10s
+      timeout: 3s
+      start_period: 30s
+      retries: 3
+
+volumes:
+  tsnet-state:
+
+networks:
+  proxy-net:
+    external: true
+```
+
+- `tsnet-state` volume persists the Tailscale node state across restarts
+- `proxy-net` is an external Docker network shared with Caddy so it can reach tsmcp by container name
+- `TS_AUTHKEY` is only needed on first start; after tsnet saves state, the node re-authenticates automatically
+- `NET_RAW` capability is required by tsnet's userspace networking
+
+```bash
+docker network create proxy-net  # if it doesn't exist yet
+docker compose up -d
+```
+
+### 5. Configure Caddy
+
+Add a route for your domain. The `flush_interval -1` is critical for SSE streaming:
+
+```
+mcp.example.com {
+    reverse_proxy tsmcp:8900 {
+        flush_interval -1
+    }
+}
+```
+
+Caddy handles TLS automatically via Let's Encrypt.
+
+### 6. Add the Claude.ai connector
+
+In [Claude.ai](https://claude.ai) settings → Integrations → Add custom integration:
+
+- **URL**: `https://mcp.example.com/mcp/my-server`
+- **Client ID**: the `client_id` from Step 1
+- **Client Secret**: the `client_secret` from Step 1
+
+Claude.ai will:
+1. Hit the MCP endpoint, get a 401
+2. Discover tsidp via `/.well-known/oauth-protected-resource`
+3. Fetch tsidp's authorization server metadata
+4. Redirect your browser to tsidp to authorize (authenticated by your Tailscale identity)
+5. Exchange the code for an access token
+6. Call the MCP endpoint with the token
+
+### 7. Verify
+
+```bash
+# Health check
+curl https://mcp.example.com/healthz
+# → {"status":"ok","tsnet_connected":true}
+
+# Resource metadata
+curl https://mcp.example.com/.well-known/oauth-protected-resource
+# → {"resource":"https://mcp.example.com","authorization_servers":["https://idp.your-tailnet.ts.net"],...}
+
+# Unauthenticated MCP request (should get 401)
+curl -X POST https://mcp.example.com/mcp/my-server \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+  -w "\nHTTP %{http_code}\n"
+# → HTTP 401
+
+# Container logs
+docker logs tsmcp --tail 20
+```
 
 ## Auth Flow in Detail
 
@@ -100,18 +275,6 @@ tsmcp ──proxy──▶ https://my-mcp-server.your-tailnet.ts.net/mcp  (via t
 - **Introspection goes through tsnet** — tsmcp dials tsidp over the tailnet, so ACLs control which nodes can validate tokens
 - A stranger cannot complete the OAuth flow: they can discover tsidp (via resource metadata), but they cannot register a client or authorize because those operations require tailnet access
 
-### Tailscale ACLs Required
-
-The tsmcp bridge node needs to reach both tsidp and the MCP servers:
-
-```jsonc
-// Allow the bridge to introspect tokens at tsidp
-{ "src": ["tag:tsmcp"], "dst": ["tag:idp"], "ip": ["tcp:443"] }
-
-// Allow the bridge to reach MCP servers
-{ "src": ["tag:tsmcp"], "dst": ["tag:mcp-server"], "ip": ["tcp:443"] }
-```
-
 ## Features
 
 - **Path-based routing** — single domain, multiple MCP servers
@@ -123,176 +286,6 @@ The tsmcp bridge node needs to reach both tsidp and the MCP servers:
 - **Health check** — `/healthz` with tsnet readiness
 - **Structured logging** — JSON via `slog`
 - **Hardened Docker** — read-only root, cap_drop ALL, unprivileged user
-
-## Deployment Guide
-
-### Prerequisites
-
-- A VPS or server (the "host") with Docker installed, joined to your Tailscale tailnet
-- A [Tailscale](https://tailscale.com/) account with at least one MCP server on the tailnet
-- A domain name pointed at the host (e.g., `mcp.example.com`)
-- [Caddy](https://caddyserver.com/) (or another reverse proxy) for TLS termination
-- [tsidp](https://tailscale.com/kb/1240/sso-custom-oidc/) running on your tailnet with Funnel enabled
-
-### Step 1: Register a client with tsidp
-
-From a machine on your tailnet, register an OAuth client for Claude.ai:
-
-```bash
-curl -s -X POST https://idp.YOUR-TAILNET.ts.net/register \
-  -H "Content-Type: application/json" \
-  -d '{
-    "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
-    "client_name": "Claude.ai MCP",
-    "grant_types": ["authorization_code", "refresh_token"],
-    "response_types": ["code"],
-    "token_endpoint_auth_method": "client_secret_basic"
-  }' | python3 -m json.tool
-```
-
-**This must be done from a tailnet node** — tsidp rejects dynamic client registration over Funnel. Save the returned `client_id` and `client_secret`.
-
-### Step 2: Generate a Tailscale auth key
-
-Go to the [Tailscale admin console](https://login.tailscale.com/admin/settings/keys) and generate a reusable auth key. This allows tsmcp's embedded tsnet node to join your tailnet.
-
-- **Reusable**: Yes (survives container restarts)
-- **Ephemeral**: Optional (node auto-removes when container stops)
-- **Tags**: e.g., `tag:tsmcp` (for ACL rules)
-
-### Step 3: Create the config file
-
-```yaml
-server:
-  listen: "0.0.0.0:8900"
-  allowed_origins:
-    - "https://claude.ai"
-    - "https://claude.com"
-
-tailnet:
-  hostname: "tsmcp"
-  state_dir: "/var/lib/tsmcp/tsnet"
-  authkey_env: "TS_AUTHKEY"
-
-auth:
-  issuer: "https://idp.your-tailnet.ts.net"
-  audience: "https://mcp.example.com"
-  introspection_url: "https://idp.your-tailnet.ts.net/introspect"
-  resource_metadata_url: "https://mcp.example.com/.well-known/oauth-protected-resource"
-
-endpoints:
-  - path: "/mcp/my-server"
-    target: "https://my-mcp-server.your-tailnet.ts.net/mcp"
-    description: "My MCP Server"
-```
-
-The `target` is the Tailscale FQDN (or MagicDNS name) of the MCP server on your tailnet. tsmcp dials it over Tailscale — the MCP server does not need to be publicly accessible.
-
-The `auth` section is optional — omit it entirely to run without authentication.
-
-### Step 4: Create the Docker Compose file
-
-```yaml
-services:
-  tsmcp:
-    image: meltforce/tsmcp:edge
-    container_name: tsmcp
-    restart: unless-stopped
-    environment:
-      - TS_AUTHKEY=tskey-auth-...
-    volumes:
-      - ./config.yaml:/etc/tsmcp/config.yaml:ro
-      - tsnet-state:/var/lib/tsmcp/tsnet
-    networks:
-      - proxy-net
-    cap_drop:
-      - ALL
-    cap_add:
-      - NET_RAW
-    security_opt:
-      - no-new-privileges:true
-    read_only: true
-    tmpfs:
-      - /tmp:noexec,nosuid,size=64m
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8900/healthz"]
-      interval: 10s
-      timeout: 3s
-      start_period: 30s
-      retries: 3
-
-volumes:
-  tsnet-state:
-
-networks:
-  proxy-net:
-    external: true
-```
-
-Notes:
-- `tsnet-state` volume persists the Tailscale node state across restarts
-- `proxy-net` is an external Docker network shared with Caddy so it can reach tsmcp by container name
-- `TS_AUTHKEY` is only needed on first start; after tsnet saves state, the node re-authenticates automatically
-- `NET_RAW` capability is required by tsnet's userspace networking
-
-Start it:
-
-```bash
-docker network create proxy-net  # if it doesn't exist yet
-docker compose up -d
-```
-
-### Step 5: Configure Caddy
-
-Add a route for your domain. The `flush_interval -1` is critical for SSE streaming:
-
-```
-mcp.example.com {
-    reverse_proxy tsmcp:8900 {
-        flush_interval -1
-    }
-}
-```
-
-Caddy handles TLS automatically via Let's Encrypt.
-
-### Step 6: Add the Claude.ai connector
-
-In [Claude.ai](https://claude.ai) settings → Integrations → Add custom integration:
-
-- **URL**: `https://mcp.example.com/mcp/my-server`
-- **Client ID**: the `client_id` from Step 1
-- **Client Secret**: the `client_secret` from Step 1
-
-Claude.ai will:
-1. Hit the MCP endpoint, get a 401
-2. Discover tsidp via `/.well-known/oauth-protected-resource`
-3. Fetch tsidp's authorization server metadata
-4. Redirect your browser to tsidp to authorize (authenticated by your Tailscale identity)
-5. Exchange the code for an access token
-6. Call the MCP endpoint with the token
-
-### Step 7: Verify
-
-```bash
-# Health check
-curl https://mcp.example.com/healthz
-# → {"status":"ok","tsnet_connected":true}
-
-# Resource metadata
-curl https://mcp.example.com/.well-known/oauth-protected-resource
-# → {"resource":"https://mcp.example.com","authorization_servers":["https://idp.your-tailnet.ts.net"],...}
-
-# Unauthenticated MCP request (should get 401)
-curl -X POST https://mcp.example.com/mcp/my-server \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
-  -w "\nHTTP %{http_code}\n"
-# → HTTP 401
-
-# Container logs
-docker logs tsmcp --tail 20
-```
 
 ## Configuration Reference
 
