@@ -111,6 +111,7 @@ func (v *IntrospectionValidator) Middleware() func(http.Handler) http.Handler {
 				return
 			}
 
+			v.logger.Info("authenticated request", "sub", claims.Sub, "username", claims.Username, "client_id", claims.ClientID, "path", r.URL.Path)
 			ctx := context.WithValue(r.Context(), claimsKey, claims)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
