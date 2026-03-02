@@ -51,6 +51,8 @@ curl -s -X POST https://idp.YOUR-TAILNET.ts.net/register \
 
 **This must be done from a tailnet node** — tsidp rejects dynamic client registration over Funnel. Save the returned `client_id` and `client_secret`.
 
+> **Why `client_secret_basic`?** tsidp does not yet support PKCE (Proof Key for Code Exchange), so it cannot act as a public OAuth client. The client must authenticate with a secret using HTTP Basic Auth (`client_secret_basic`). This means Claude.ai needs both the `client_id` and `client_secret` when configured as a connector.
+
 ### 2. Generate a Tailscale auth key
 
 Go to the [Tailscale admin console](https://login.tailscale.com/admin/settings/keys) and generate an auth key. This allows tsmcp's embedded tsnet node to join your tailnet.
@@ -250,14 +252,15 @@ Claude.ai ──GET──▶ https://mcp.example.com/authorize?client_id=...&...
 tsidp ──redirect──▶ https://claude.ai/api/mcp/auth_callback?code=...&state=...
 
 Claude.ai ──POST──▶ https://mcp.example.com/token  (proxied to tsidp via tsnet)
-                      grant_type=authorization_code&code=...&code_verifier=...
+                      Authorization: Basic base64(client_id:client_secret)
+                      grant_type=authorization_code&code=...
            ◀── { "access_token": "<opaque>", "token_type": "Bearer", "expires_in": 300 }
 ```
 
 4. Claude.ai hits `/authorize` on tsmcp, gets a 302 redirect to tsidp's authorize endpoint
 5. **tsidp authenticates the user via their Tailscale identity** — the browser connects to tsidp over Tailscale Funnel, and tsidp identifies the user by their tailnet node. This is the key security boundary: only users on your tailnet can authorize.
 6. tsidp redirects back to Claude.ai with an authorization code
-7. Claude.ai exchanges the code for an opaque access token (5-minute TTL) via `POST /token` on tsmcp, which proxies to tsidp over the tailnet
+7. Claude.ai exchanges the code for an opaque access token (5-minute TTL) via `POST /token` on tsmcp, which proxies to tsidp over the tailnet. Authentication uses `client_secret_basic` (HTTP Basic Auth with client credentials) — tsidp does not support PKCE.
 
 ### Authenticated Request
 
