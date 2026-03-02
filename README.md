@@ -9,23 +9,23 @@ A Go reverse proxy that exposes private [MCP](https://modelcontextprotocol.io/) 
 Claude.ai ──HTTPS──▶ Caddy ──HTTP──▶ tsmcp ────────┤
      │                                 │            └──Tailnet──▶ MCP Server B
      │                                 │
-     │                                 └──Tailnet──▶ tsidp (/introspect)
+     │                                 └──Tailnet──▶ tsidp (/token, /register, /introspect)
      │                                                 ▲
      └──────────HTTPS (Funnel)─────────────────────────┘
-              (OAuth: discovery, authorize, token)
+                         (browser: /authorize)
 ```
 
-Two separate connections to tsidp serve different purposes:
+tsmcp connects to tsidp in two ways:
 
-- **Claude.ai → tsidp** (over HTTPS/Funnel): OAuth discovery, user authorization, and token exchange. Claude.ai talks to tsidp directly — tsmcp is not involved in this leg.
-- **tsmcp → tsidp** (over Tailnet via tsnet): Token introspection (RFC 7662). On each authenticated request, tsmcp validates the opaque token by calling tsidp's `/introspect` endpoint over the tailnet.
+- **tsmcp → tsidp** (over Tailnet via tsnet): OAuth token exchange (`/token`), client registration (`/register`), and token introspection (`/introspect`). The MCP spec requires these endpoints at the resource server's origin, so tsmcp proxies them to tsidp over the tailnet.
+- **Browser → tsidp** (over HTTPS/Funnel): User authorization only (`/authorize`). tsmcp sends a 302 redirect — the browser must reach tsidp directly so Tailscale can verify the user's identity.
 
 Each path in the config maps to a separate Claude.ai custom connector. One deployment serves multiple MCP servers.
 
 ## Prerequisites
 
 - **Tailscale account** with at least one MCP server on the tailnet
-- **tsidp** running on your tailnet with [Funnel enabled](https://tailscale.com/docs/features/tailscale-funnel) — Claude.ai must reach it over the public internet for OAuth
+- **tsidp** running on your tailnet with [Funnel enabled](https://tailscale.com/docs/features/tailscale-funnel) — the user's browser must reach it over the public internet for the `/authorize` step
 - **VPS or server** with a **public IP**, Docker installed, and joined to your Tailscale tailnet
 - **Domain name** pointed at the host (e.g., `mcp.example.com`)
 - **Caddy** (or another reverse proxy) for TLS termination — must support SSE flush
@@ -178,9 +178,9 @@ In [Claude.ai](https://claude.ai) settings → Integrations → Add custom integ
 Claude.ai will:
 1. Hit the MCP endpoint, get a 401
 2. Discover tsidp via `/.well-known/oauth-protected-resource`
-3. Fetch tsidp's authorization server metadata
+3. Fetch authorization server metadata from tsmcp (proxied from tsidp, with `/token` and `/register` rewritten to tsmcp's origin)
 4. Redirect your browser to tsidp to authorize (authenticated by your Tailscale identity)
-5. Exchange the code for an access token
+5. Exchange the code for an access token via tsmcp's `/token` endpoint (proxied to tsidp over the tailnet)
 6. Call the MCP endpoint with the token
 
 ### 7. Verify
@@ -207,7 +207,9 @@ docker logs tsmcp --tail 20
 
 ## Auth Flow in Detail
 
-tsmcp implements the [MCP Authorization specification](https://modelcontextprotocol.io/specification/draft/basic/authorization) using Tailscale's identity provider (tsidp) as the OAuth authorization server. Here's the full flow:
+tsmcp implements the [MCP Authorization specification](https://modelcontextprotocol.io/specification/draft/basic/authorization) using Tailscale's identity provider (tsidp) as the OAuth authorization server.
+
+The MCP spec requires that OAuth endpoints (`/token`, `/register`, `/.well-known/oauth-authorization-server`) are served at the **resource server's origin** — not at the authorization server. tsmcp handles this by proxying these endpoints to tsidp over the tailnet via tsnet. The only endpoint the browser reaches directly on tsidp is `/authorize` (via 302 redirect), because tsidp needs to verify the user's Tailscale identity.
 
 ### Discovery
 
@@ -223,40 +225,39 @@ Claude.ai ──GET──▶ https://mcp.example.com/.well-known/oauth-protected
                   "authorization_servers": ["https://idp.your-tailnet.ts.net"]
                 }
 
-Claude.ai ──GET──▶ https://idp.your-tailnet.ts.net/.well-known/oauth-authorization-server
-           ◀── 200
+Claude.ai ──GET──▶ https://mcp.example.com/.well-known/oauth-authorization-server
+           ◀── 200  (proxied from tsidp, with endpoints rewritten)
                 {
                   "authorization_endpoint": "https://idp.your-tailnet.ts.net/authorize",
-                  "token_endpoint": "https://idp.your-tailnet.ts.net/token",
-                  "introspection_endpoint": "https://idp.your-tailnet.ts.net/introspect",
+                  "token_endpoint": "https://mcp.example.com/token",
+                  "registration_endpoint": "https://mcp.example.com/register",
                   ...
                 }
 ```
 
 1. Claude.ai hits the MCP endpoint without a token, gets a `401` with the resource metadata URL
 2. Claude.ai fetches the [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728) Protected Resource Metadata, which points to tsidp as the authorization server
-3. Claude.ai fetches tsidp's [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414) Authorization Server Metadata to find the OAuth endpoints
+3. Claude.ai fetches [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414) Authorization Server Metadata — tsmcp proxies from tsidp and rewrites `token_endpoint` and `registration_endpoint` to point at itself, keeping `authorization_endpoint` at tsidp
 
 ### Authorization
 
 ```
-Claude.ai ──redirect──▶ https://idp.your-tailnet.ts.net/authorize?
-                           client_id=...&redirect_uri=https://claude.ai/api/mcp/auth_callback&
-                           code_challenge=...&code_challenge_method=S256&state=...
+Claude.ai ──GET──▶ https://mcp.example.com/authorize?client_id=...&...
+           ◀── 302 → https://idp.your-tailnet.ts.net/authorize?client_id=...&...
 
-   [User's browser authenticates via Tailscale identity]
+   [User's browser follows redirect to tsidp, authenticates via Tailscale identity]
 
 tsidp ──redirect──▶ https://claude.ai/api/mcp/auth_callback?code=...&state=...
 
-Claude.ai ──POST──▶ https://idp.your-tailnet.ts.net/token
+Claude.ai ──POST──▶ https://mcp.example.com/token  (proxied to tsidp via tsnet)
                       grant_type=authorization_code&code=...&code_verifier=...
            ◀── { "access_token": "<opaque>", "token_type": "Bearer", "expires_in": 300 }
 ```
 
-4. Claude.ai redirects the user's browser to tsidp's authorize endpoint
-5. **tsidp authenticates the user via their Tailscale identity** — the browser connects to tsidp over Tailscale, and tsidp identifies the user by their tailnet node. This is the key security boundary: only users on your tailnet can authorize.
+4. Claude.ai hits `/authorize` on tsmcp, gets a 302 redirect to tsidp's authorize endpoint
+5. **tsidp authenticates the user via their Tailscale identity** — the browser connects to tsidp over Tailscale Funnel, and tsidp identifies the user by their tailnet node. This is the key security boundary: only users on your tailnet can authorize.
 6. tsidp redirects back to Claude.ai with an authorization code
-7. Claude.ai exchanges the code for an opaque access token (5-minute TTL)
+7. Claude.ai exchanges the code for an opaque access token (5-minute TTL) via `POST /token` on tsmcp, which proxies to tsidp over the tailnet
 
 ### Authenticated Request
 
@@ -342,6 +343,7 @@ The bridge node needs to reach both tsidp (for token introspection) and the MCP 
 - **Path-based routing** — single domain, multiple MCP servers
 - **SSE streaming** — automatic flush for Server-Sent Events
 - **OAuth auth** — validate opaque tokens via RFC 7662 introspection against tsidp
+- **OAuth endpoint proxying** — `/token`, `/register`, and AS metadata proxied to tsidp via tsnet; `/authorize` redirected to tsidp for Tailscale identity
 - **RFC 9728 metadata** — `/.well-known/oauth-protected-resource` for MCP auth discovery
 - **Tailscale identity** — authentication is backed by Tailscale node identity, not passwords
 - **Origin validation** — restrict to `claude.ai` / `claude.com`
@@ -423,7 +425,7 @@ go build -o tsmcp .
 ├── main.go                           # Entry point, lifecycle management
 ├── internal/
 │   ├── config/                       # YAML config loading + validation
-│   ├── auth/                         # Token introspection + RFC 9728 metadata
+│   ├── auth/                         # Token introspection + RFC 9728 metadata + OAuth endpoint proxying
 │   ├── proxy/                        # Reverse proxy handler + transport
 │   ├── tsbridge/                     # Tailscale network bridge (tsnet)
 │   ├── health/                       # Health check endpoint
