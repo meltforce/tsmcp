@@ -44,4 +44,4 @@ jobs:
         run: |
           ssh -o StrictHostKeyChecking=no root@${{ secrets.DEPLOY_HOST }} \
             "docker pull meltforce/tsmcp:edge && \
-             cd ${{ vars.DEPLOY_PATH }} && docker compose up -d mcp-bridge"
+             cd ${{ vars.DEPLOY_PATH }} && docker compose up -d tsmcp"
