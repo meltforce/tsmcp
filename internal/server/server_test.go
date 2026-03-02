@@ -368,6 +368,183 @@ func TestMCPEndpointWithValidToken(t *testing.T) {
 	}
 }
 
+func TestOAuthRoutesRegistered(t *testing.T) {
+	// Mock AS metadata endpoint
+	asServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"issuer":                 testIssuer,
+			"authorization_endpoint": testIssuer + "/authorize",
+			"token_endpoint":         testIssuer + "/token",
+			"registration_endpoint":  testIssuer + "/register",
+		})
+	}))
+	defer asServer.Close()
+
+	cfg := testConfig()
+	cfg.Auth = testAuthConfig(asServer.URL) // introspection URL doesn't matter here
+	cfg.Auth.Issuer = asServer.URL          // point issuer at our mock
+
+	transport := proxy.NewTailnetTransport(proxy.NewDirectDialer())
+	checker := &mockHealthChecker{ready: true}
+
+	srv, err := New(cfg, transport, checker, nil, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("AS metadata", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil)
+		w := httptest.NewRecorder()
+		srv.Handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		var got map[string]any
+		json.Unmarshal(w.Body.Bytes(), &got)
+		if got["token_endpoint"] != "https://mcp.example.com/token" {
+			t.Errorf("token_endpoint = %v, want rewritten to resource origin", got["token_endpoint"])
+		}
+	})
+
+	t.Run("openid-configuration alias", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/.well-known/openid-configuration", nil)
+		w := httptest.NewRecorder()
+		srv.Handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("status = %d, want 200", w.Code)
+		}
+	})
+
+	t.Run("authorize redirect", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/authorize?response_type=code&client_id=test", nil)
+		w := httptest.NewRecorder()
+		srv.Handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusFound {
+			t.Fatalf("status = %d, want 302", w.Code)
+		}
+		loc := w.Header().Get("Location")
+		if !strings.HasPrefix(loc, asServer.URL+"/authorize") {
+			t.Errorf("Location = %q, want prefix %s/authorize", loc, asServer.URL)
+		}
+		if !strings.Contains(loc, "response_type=code") {
+			t.Error("query params not preserved in redirect")
+		}
+	})
+}
+
+func TestOAuthRoutesUnauthenticated(t *testing.T) {
+	// Mock AS metadata + token endpoint
+	asServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/oauth-authorization-server":
+			json.NewEncoder(w).Encode(map[string]any{
+				"issuer":         "https://idp.example.com",
+				"token_endpoint": "https://idp.example.com/token",
+			})
+		case "/token":
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"access_token": "tok",
+				"token_type":   "bearer",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer asServer.Close()
+
+	introspSrv := setupIntrospectionServer(t, true)
+	cfg := testConfig()
+	cfg.Auth = testAuthConfig(introspSrv.URL)
+	cfg.Auth.Issuer = asServer.URL
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	cfg.Endpoints[0].Target = upstream.URL
+
+	v := auth.NewIntrospectionValidator(introspSrv.URL, testClientID, testSecret, testMetadata, "", "", nil, slog.Default())
+	defer v.Close()
+
+	transport := proxy.NewTailnetTransport(proxy.NewDirectDialer())
+	checker := &mockHealthChecker{ready: true}
+
+	srv, err := New(cfg, transport, checker, v, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// OAuth endpoints should work without Bearer token (MCP endpoints require it)
+	t.Run("token endpoint no auth needed", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader("grant_type=authorization_code"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		srv.Handler.ServeHTTP(w, req)
+
+		if w.Code == http.StatusUnauthorized {
+			t.Error("POST /token returned 401 — should be unauthenticated")
+		}
+	})
+
+	t.Run("authorize no auth needed", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/authorize", nil)
+		w := httptest.NewRecorder()
+		srv.Handler.ServeHTTP(w, req)
+
+		if w.Code == http.StatusUnauthorized {
+			t.Error("GET /authorize returned 401 — should be unauthenticated")
+		}
+	})
+
+	t.Run("MCP still requires auth", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/mcp/test", strings.NewReader(`{}`))
+		w := httptest.NewRecorder()
+		srv.Handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("POST /mcp/test status = %d, want 401", w.Code)
+		}
+	})
+}
+
+func TestOAuthRoutesAbsentWithoutAuth(t *testing.T) {
+	cfg := testConfig()
+	// Auth is nil
+
+	transport := proxy.NewTailnetTransport(proxy.NewDirectDialer())
+	checker := &mockHealthChecker{ready: true}
+
+	srv, err := New(cfg, transport, checker, nil, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	routes := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/.well-known/oauth-authorization-server"},
+		{http.MethodGet, "/.well-known/openid-configuration"},
+		{http.MethodPost, "/token"},
+		{http.MethodPost, "/register"},
+		{http.MethodGet, "/authorize"},
+	}
+
+	for _, rt := range routes {
+		req := httptest.NewRequest(rt.method, rt.path, nil)
+		w := httptest.NewRecorder()
+		srv.Handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Errorf("%s %s: status = %d, want 404", rt.method, rt.path, w.Code)
+		}
+	}
+}
+
 func TestAuthlessModePreserved(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

@@ -21,7 +21,7 @@ func New(cfg *config.Config, transport http.RoundTripper, checker health.Checker
 	// Health check — always unauthenticated
 	mux.Handle("GET /healthz", health.Handler(checker))
 
-	// OAuth Protected Resource Metadata — only when auth is configured
+	// OAuth endpoints — only when auth is configured
 	if cfg.Auth != nil {
 		// resource identifier = origin of the metadata URL (strip the well-known path)
 		metaURL, err := url.Parse(cfg.Auth.ResourceMetadataURL)
@@ -32,6 +32,25 @@ func New(cfg *config.Config, transport http.RoundTripper, checker health.Checker
 
 		mux.Handle("GET /.well-known/oauth-protected-resource",
 			auth.MetadataHandler(resource, []string{cfg.Auth.Issuer}))
+
+		// AS metadata proxy — rewrites token/register endpoints to point here
+		asMetadata := auth.ASMetadataHandler(cfg.Auth.Issuer, resource, transport, logger)
+		mux.Handle("GET /.well-known/oauth-authorization-server", asMetadata)
+		mux.Handle("GET /.well-known/openid-configuration", asMetadata)
+
+		// OAuth token and registration proxied to tsidp via tsnet
+		issuerURL, err := url.Parse(cfg.Auth.Issuer)
+		if err != nil {
+			return nil, fmt.Errorf("parsing issuer URL: %w", err)
+		}
+		tokenTarget := &url.URL{Scheme: issuerURL.Scheme, Host: issuerURL.Host, Path: "/token"}
+		registerTarget := &url.URL{Scheme: issuerURL.Scheme, Host: issuerURL.Host, Path: "/register"}
+
+		mux.Handle("POST /token", auth.OAuthProxyHandler(tokenTarget, transport, logger))
+		mux.Handle("POST /register", auth.OAuthProxyHandler(registerTarget, transport, logger))
+
+		// Authorize redirect — browser must reach tsidp directly for Tailscale identity
+		mux.Handle("GET /authorize", auth.OAuthAuthorizeRedirectHandler(cfg.Auth.Issuer, logger))
 	}
 
 	// MCP endpoint routes
